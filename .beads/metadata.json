@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "llama_broker",
+  "project_id": "69b37106-8c08-49ec-8edd-0438f384ef5a"
+}
