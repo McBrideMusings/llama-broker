@@ -8,6 +8,29 @@
         "models"
     ],
     "definitions": {
+        "tenantProbe": {
+            "type": "object",
+            "description": "An HTTP request or a command that reads true or false. Set url or cmd, not both.",
+            "properties": {
+                "url": {"type": "string", "description": "Absolute http(s) URL to request."},
+                "method": {"type": "string", "default": "GET", "description": "HTTP method for url."},
+                "status": {"type": "integer", "default": 200, "description": "The probe is false unless the response has this status."},
+                "json": {"type": "string", "description": "Dot path into the JSON response body (e.g. queue_running or session.active). The probe is true when the value is true, a non-zero number, or a non-empty string, array or object."},
+                "cmd": {"type": "string", "description": "Command to run instead of url. The probe is true when it exits 0."}
+            },
+            "additionalProperties": false
+        },
+        "tenantAction": {
+            "type": "object",
+            "description": "An HTTP request or a command run for its effect. Set url or cmd, not both.",
+            "properties": {
+                "url": {"type": "string", "description": "Absolute http(s) URL to request."},
+                "method": {"type": "string", "default": "POST", "description": "HTTP method for url."},
+                "body": {"type": "string", "description": "Request body for url, sent as application/json."},
+                "cmd": {"type": "string", "description": "Command to run instead of url."}
+            },
+            "additionalProperties": false
+        },
         "macros": {
             "type": "object",
             "additionalProperties": {
@@ -915,6 +938,26 @@
             },
             "additionalProperties": false,
             "default": {}
+        },
+        "tenants": {
+            "type": "object",
+            "default": {},
+            "description": "GPU workloads ranked by priority. While a tenant's condition is true it wants the GPU: models of lower-priority tenants are held or refused, and running ones are drained and stopped.",
+            "propertyNames": {"type": "string", "minLength": 1},
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "models": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Model IDs or aliases this tenant owns. A model belongs to at most one tenant."},
+                    "groups": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Routing groups whose members this tenant owns. Needs the group router."},
+                    "priority": {"type": "integer", "default": 0, "description": "Higher priority wins the GPU."},
+                    "condition": {"$ref": "#/definitions/tenantProbe", "description": "Polled every interval; while true the tenant wants the GPU. Without it the tenant never preempts others."},
+                    "busy": {"$ref": "#/definitions/tenantProbe", "description": "Polled during a drain; the stop waits while it is true, up to the model's unloadTimeout."},
+                    "drain": {"$ref": "#/definitions/tenantAction", "description": "Run once the busy probe reads false, just before the stop."},
+                    "interval": {"type": "integer", "minimum": 0, "default": 5, "description": "Seconds between condition polls and between busy polls during a drain."},
+                    "onBlocked": {"type": "string", "enum": ["hold", "refuse"], "default": "hold", "description": "What a request for this tenant's models gets while a higher tenant wants the GPU: hold (wait in the queue) or refuse (HTTP 503)."}
+                },
+                "additionalProperties": false
+            }
         },
         "routing": {
             "type": "object",

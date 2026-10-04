@@ -1,0 +1,115 @@
+package config
+
+import (
+	"strings"
+	"testing"
+)
+
+const tenantModels = `
+models:
+  chat:
+    cmd: path/to/cmd --port ${PORT}
+    aliases: [chat-alias]
+  coder:
+    cmd: path/to/cmd --port ${PORT}
+  comfy:
+    cmd: path/to/cmd --port ${PORT}
+groups:
+  llms:
+    members: [chat, coder]
+`
+
+func TestTenants_ConfigDefaultsAndMembers(t *testing.T) {
+	cfg, err := LoadConfigFromReader(strings.NewReader(tenantModels + `
+tenants:
+  gaming:
+    priority: 100
+    condition:
+      url: http://127.0.0.1:9999/status
+      json: session.active
+  comfy:
+    priority: 10
+    models: [comfy]
+    busy:
+      cmd: test -f /tmp/busy
+    drain:
+      url: http://127.0.0.1:8188/free
+      body: '{"free_memory":true}'
+    onBlocked: refuse
+  llm:
+    priority: 1
+    groups: [llms]
+    models: [chat-alias]
+`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	gaming := cfg.Tenants["gaming"]
+	if gaming.Interval != 5 || gaming.OnBlocked != "hold" {
+		t.Errorf("gaming interval=%d onBlocked=%q, want 5 and hold", gaming.Interval, gaming.OnBlocked)
+	}
+	if gaming.Condition.Method != "GET" || gaming.Condition.Status != 200 {
+		t.Errorf("gaming condition method=%q status=%d, want GET and 200", gaming.Condition.Method, gaming.Condition.Status)
+	}
+	if len(gaming.Members) != 0 {
+		t.Errorf("gaming members=%v want none", gaming.Members)
+	}
+
+	comfy := cfg.Tenants["comfy"]
+	if comfy.Drain.Method != "POST" || comfy.OnBlocked != "refuse" {
+		t.Errorf("comfy drain method=%q onBlocked=%q, want POST and refuse", comfy.Drain.Method, comfy.OnBlocked)
+	}
+
+	if got := strings.Join(cfg.Tenants["llm"].Members, ","); got != "chat,coder" {
+		t.Errorf("llm members=%q want chat,coder (alias resolved, group expanded, deduplicated)", got)
+	}
+}
+
+func TestTenants_ConfigRejectsInvalid(t *testing.T) {
+	cases := map[string]struct{ tenants, want string }{
+		"unknown model": {`
+  a: {models: [nope]}`, `tenants.a.models references unknown model "nope"`},
+		"unknown group": {`
+  a: {groups: [nope]}`, `tenants.a.groups references unknown group "nope"`},
+		"model in two tenants": {`
+  a: {models: [chat]}
+  b: {groups: [llms]}`, "model chat belongs to tenants a and b"},
+		"bad onBlocked": {`
+  a: {onBlocked: drop}`, "tenants.a.onBlocked must be hold or refuse"},
+		"url and cmd": {`
+  a: {condition: {url: "http://x/", cmd: "true"}}`, "tenants.a.condition: set url or cmd, not both"},
+		"neither url nor cmd": {`
+  a: {busy: {json: x}}`, "tenants.a.busy: set url or cmd"},
+		"relative url": {`
+  a: {drain: {url: /free}}`, "tenants.a.drain: url \"/free\" must be an absolute http or https URL"},
+		"json on cmd": {`
+  a: {condition: {cmd: "true", json: x}}`, "status, json and method apply to url probes only"},
+		"negative interval": {`
+  a: {interval: -1}`, "tenants.a.interval must be >= 0"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := LoadConfigFromReader(strings.NewReader(tenantModels + "tenants:" + c.tenants + "\n"))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err=%v want containing %q", err, c.want)
+			}
+		})
+	}
+}
+
+func TestTenants_ConfigGroupsNeedGroupRouter(t *testing.T) {
+	_, err := LoadConfigFromReader(strings.NewReader(`
+models:
+  a:
+    cmd: path/to/cmd --port ${PORT}
+matrix:
+  sets:
+    s: "a"
+tenants:
+  t: {groups: [x]}
+`))
+	if err == nil || !strings.Contains(err.Error(), "tenants.t.groups needs the group router") {
+		t.Fatalf("err=%v", err)
+	}
+}

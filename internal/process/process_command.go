@@ -134,6 +134,15 @@ type ProcessCommand struct {
 	// It is initialized when the process becomes Ready and updated after ServeHTTP completes.
 	lastUse  atomic.Int64
 	inflight atomic.Int64 // current in-flight ServeHTTP calls
+
+	// stopHook, when set, runs at the start of Stop on a live process with the
+	// model's unloadTimeout. internal/tenants drains a tenant through it.
+	stopHook atomic.Pointer[func(unloadTimeout time.Duration)]
+}
+
+// SetStopHook installs fn to run before every Stop of a live process.
+func (p *ProcessCommand) SetStopHook(fn func(unloadTimeout time.Duration)) {
+	p.stopHook.Store(&fn)
 }
 
 var _ Process = (*ProcessCommand)(nil)
@@ -803,6 +812,11 @@ func (p *ProcessCommand) WaitReady(ctx context.Context) error {
 }
 
 func (p *ProcessCommand) Stop(timeout time.Duration) error {
+	if hook := p.stopHook.Load(); hook != nil {
+		if st := p.State(); st != StateStopped && st != StateShutdown {
+			(*hook)(time.Duration(p.config.UnloadTimeout) * time.Second)
+		}
+	}
 	req := stopReq{
 		timeout: timeout,
 		respond: make(chan error, 1),

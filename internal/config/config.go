@@ -196,6 +196,7 @@ type Config struct {
 	Models    map[string]ModelConfig    `yaml:"models"` /* key is model ID */
 	Profiles  map[string]ProfileConfig  `yaml:"profiles"`
 	Selectors map[string]SelectorConfig `yaml:"selectors"`
+	Tenants   map[string]TenantConfig   `yaml:"tenants"` /* key is tenant name, see tenants.go */
 
 	// GlobalConcurrencyLimit caps the number of inference requests served at
 	// once across all models. 0 (default) means no limit. See issue #1086.

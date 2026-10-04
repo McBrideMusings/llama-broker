@@ -315,6 +315,10 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		return Config{}, err
 	}
 
+	if err := validateTenants(&config); err != nil {
+		return Config{}, err
+	}
+
 	return config, nil
 }
 

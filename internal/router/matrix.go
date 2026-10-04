@@ -49,7 +49,7 @@ func NewMatrix(conf config.Config, logs *logmon.Group) (*Matrix, error) {
 	}
 
 	r := &Matrix{baseRouter: base}
-	go base.run()
+	base.start()
 	return r, nil
 }
 

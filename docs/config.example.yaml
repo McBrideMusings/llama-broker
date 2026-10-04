@@ -616,6 +616,66 @@ hooks:
     preload:
       - "llama"
 
+# tenants: GPU workloads ranked by priority
+# - optional, default: empty dictionary
+# - while a tenant's condition is true it wants the GPU: a request for a model of
+#   a lower-priority tenant is held (or refused with HTTP 503), and running models
+#   of lower tenants are drained and stopped before the higher tenant loads
+# - a drain polls the busy probe until it reads false (at most the model's
+#   unloadTimeout), runs the drain action, then stops the model
+# - models no tenant owns are never held, refused or drained
+# - see the knowledge base guide guides/routing/tenants
+tenants:
+  # a workload outside llama-swap that announces itself through an HTTP endpoint
+  "game-streaming":
+    # priority: an integer; higher wins the GPU
+    # - optional, default: 0
+    priority: 100
+
+    # condition: polled every interval seconds; while true this tenant wants the GPU
+    # - optional; without one the tenant never preempts others
+    # - url form: true when the response status equals status (default 200) and,
+    #   when json is set, the value at that dot path is true, a non-zero number,
+    #   or a non-empty string, array or object
+    # - cmd form: true when the command exits 0
+    # - a probe that fails (connection refused, timeout) reads false
+    condition:
+      url: http://127.0.0.1:9000/session
+      json: active
+
+    # interval: seconds between polls of condition, and of busy during a drain
+    # - optional, default: 5
+    interval: 5
+
+  "chat":
+    priority: 10
+
+    # models: model IDs or aliases this tenant owns
+    # - a model belongs to at most one tenant
+    models:
+      - "llama"
+
+    # groups: routing groups whose members this tenant owns
+    # - optional, only with the group router
+    groups: []
+
+    # busy: polled during a drain; the stop waits while it is true
+    # - optional, same forms as condition
+    busy:
+      cmd: test -f /tmp/llama-busy
+
+    # drain: run once busy reads false, just before the stop
+    # - optional; url form (method defaults to POST, body is sent as JSON) or cmd
+    drain:
+      url: http://127.0.0.1:9000/llama-released
+      body: '{"model":"llama"}'
+
+    # onBlocked: what a request gets while a higher tenant wants the GPU
+    # - optional, default: hold
+    # - hold: wait in the queue until the higher tenant no longer wants the GPU
+    # - refuse: fail at once with HTTP 503 naming the tenant that holds the GPU
+    onBlocked: hold
+
 # routing:
 # Controls how llama-swap decides which models can run at the same time and
 # which get swapped out. Choose one of two swap engines:

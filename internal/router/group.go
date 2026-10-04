@@ -52,7 +52,7 @@ func NewGroup(conf config.Config, logs *logmon.Group) (*Group, error) {
 	}
 
 	g := &Group{baseRouter: base}
-	go base.run()
+	base.start()
 	return g, nil
 }
 

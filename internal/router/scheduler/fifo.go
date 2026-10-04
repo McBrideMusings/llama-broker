@@ -38,6 +38,7 @@ type FIFO struct {
 	planner Swapper
 	cfg     config.FifoConfig
 	effects Effects
+	gate    TenantGate
 
 	limits   map[string]int
 	active   map[string]*activeSwap
@@ -59,12 +60,14 @@ func NewFIFO(name string, logger *logmon.Monitor, planner Swapper, cfg config.Fi
 		limits[id] = limit
 	}
 
+	gate, _ := eff.(TenantGate)
 	return &FIFO{
 		name:     name,
 		logger:   logger,
 		planner:  planner,
 		cfg:      cfg,
 		effects:  eff,
+		gate:     gate,
 		limits:   limits,
 		active:   make(map[string]*activeSwap),
 		reserved: make(map[string]int),
@@ -100,7 +103,22 @@ func (s *FIFO) OnRequest(req HandlerReq) {
 		return
 	}
 
+	// Tenants: a model outranked by a tenant that wants the GPU is refused
+	// here or held in the queue below until OnTenantsChanged.
+	blocked, refuse := s.tenantBlock(req.Model)
+	if blocked != nil && refuse {
+		s.logger.Infof("%s: refusing request for model %s: %v", s.name, req.Model, blocked)
+		s.rejectAdmission(req, blocked)
+		return
+	}
+
 	if !s.admit(req) {
+		return
+	}
+
+	if blocked != nil {
+		s.logger.Infof("%s: holding request for model %s: %v", s.name, req.Model, blocked)
+		s.enqueue(req)
 		return
 	}
 
@@ -411,6 +429,14 @@ func (s *FIFO) drainQueue() {
 		state, ok := s.effects.ModelState(req.Model)
 		if !ok {
 			s.grantError(req, ErrModelNotFound)
+			continue
+		}
+		if blocked, refuse := s.tenantBlock(req.Model); blocked != nil {
+			if refuse {
+				s.grantError(req, blocked)
+			} else {
+				remaining = append(remaining, req)
+			}
 			continue
 		}
 		if sw, ok := s.active[req.Model]; ok {

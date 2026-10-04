@@ -170,7 +170,7 @@ func TestDocs_RealConfigExample_SectionKeys(t *testing.T) {
 		"metricsMaxInMemory", "captureBuffer", "ui", "performance", "startPort",
 		"sendLoadingState", "includeAliasesInList", "globalTTL", "unloadTimeout",
 		"globalConcurrencyLimit", "macros", "apiKeys", "security", "tailcat",
-		"upstream", "profiles", "selectors", "models", "hooks", "routing",
+		"upstream", "profiles", "selectors", "models", "hooks", "tenants", "routing",
 		"peers",
 	}
 

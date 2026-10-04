@@ -62,6 +62,8 @@ type Scheduler interface {
 	// processes via Effects, and drains the queue. It must block until the
 	// targeted processes have stopped.
 	OnUnload(targets []string, timeout time.Duration)
+	// OnTenantsChanged re-evaluates requests held by the tenant gate.
+	OnTenantsChanged()
 	// OnShutdown grants err to every waiter the scheduler still holds (active
 	// swap waiters and queued requests). Process teardown is the baseRouter's
 	// responsibility.

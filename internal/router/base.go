@@ -14,6 +14,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/process"
 	"github.com/mostlygeek/llama-swap/internal/router/scheduler"
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
+	"github.com/mostlygeek/llama-swap/internal/tenants"
 )
 
 type shutdownReq struct {
@@ -60,6 +61,11 @@ type baseRouter struct {
 	swapDoneCh  chan scheduler.SwapDone
 	serveDoneCh chan scheduler.ServeDoneEvent
 
+	// tenants is nil when the config has no tenants. wakeCh (buffer 1, so
+	// wakes coalesce) asks the run loop to re-check requests it holds.
+	tenants *tenants.Manager
+	wakeCh  chan struct{}
+
 	runDone chan struct{}
 
 	// testProcessed, when non-nil, receives one event after each handlerReq
@@ -94,6 +100,8 @@ func newBaseRouter(
 		unloadCh:    make(chan unloadReq),
 		swapDoneCh:  make(chan scheduler.SwapDone),
 		serveDoneCh: make(chan scheduler.ServeDoneEvent),
+		tenants:     tenants.New(conf.Tenants, logger),
+		wakeCh:      make(chan struct{}, 1),
 		runDone:     make(chan struct{}),
 	}
 	sched, err := scheduler.New(conf, name, logger, planner, b)
@@ -138,6 +146,9 @@ func (b *baseRouter) run() {
 
 		case ev := <-b.serveDoneCh:
 			b.schedule.OnServeDone(ev)
+
+		case <-b.wakeCh:
+			b.schedule.OnTenantsChanged()
 		}
 	}
 }
