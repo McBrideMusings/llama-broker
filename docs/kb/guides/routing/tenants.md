@@ -82,14 +82,28 @@ as JSON) or a command.
 Every stop of a tenant's model drains the tenant first. That covers a stop to
 make room for a higher tenant, a swap that evicts the model, a ttl unload, an
 unload from the API, and shutdown. The drain polls `busy` every `interval`
-seconds until it reads false, waiting at most the model's `unloadTimeout`.
-Then it runs `drain` and the model stops. If the tenant is still busy when
-`unloadTimeout` runs out, the drain logs a warning and the model stops anyway.
+seconds until it reads false, then runs `drain`, and the model stops. The
+busy wait and `drain` together finish within the model's `unloadTimeout`,
+counted from the start of the drain; `drain` gets whatever time the busy wait
+left. If the tenant is still busy when `unloadTimeout` runs out, the drain
+logs a warning, skips `drain` with `drain action skipped: no time left of
+unloadTimeout <t>`, and the model stops anyway. A probe or action
+command still running at the deadline is killed together with every process
+it started.
 Each failed busy probe logs its own warning drain step,
 `probe="busy probe failed: <error>" reason="treating as busy, waiting (N in a row)"`,
 and when `unloadTimeout` runs out while the probe is still failing the drain
 logs `busy probe still failing after <unloadTimeout> (N in a row), stopping
-anyway`. Stops of two models from one tenant share a single drain.
+anyway`.
+
+A tenant drains once per stop episode: one preempt, swap, API unload or
+shutdown that stops several of its models. The first of those stops runs the
+drain, bounded by the largest `unloadTimeout` among them; each other one logs
+`not draining again: the stop of <model> drained this tenant in the same stop
+batch` and stops without probing. An API unload of every model counts as one
+episode even when the models have different `unloadTimeout`s. A stop outside
+the episode, such as a ttl unload, drains again; only if it starts while
+another drain of the tenant is running does it wait for that drain instead.
 
 ## Keeping VRAM free for other programs
 
@@ -147,7 +161,8 @@ tenants: decision time=2026-10-05T14:02:11Z tenant=chat model=qwen action=hold p
 - **Requests hang under `hold`.** They wait for as long as the higher tenant
   wants the GPU. Use `onBlocked: refuse` when clients would rather retry.
 - **A render is cut off.** The drain waits at most `unloadTimeout`. Raise the
-  model's `unloadTimeout` to cover your longest job.
+  model's `unloadTimeout` to cover your longest job plus the time `drain`
+  takes; a job that uses up the whole `unloadTimeout` leaves none for `drain`.
 - **Every stop takes the full `unloadTimeout`.** The busy endpoint is
   unreachable, answers something other than JSON, or takes longer than
   `interval`, so every probe fails and counts as busy. The drain logs `busy
@@ -189,7 +204,7 @@ priority first:
  "tenants": [{"name": "comfy", "priority": 10, "vramMiB": 12000, "onBlocked": "hold",
   "models": ["comfy"], "wantsGPU": false, "condition": null,
   "busy": {"result": false, "raw": "HTTP 200, exec_info.queue_remaining=0", "probedAt": "2026-10-04T20:15:09Z"},
-  "draining": false, "stopping": false,
+  "draining": false, "drains": 3, "stopping": false,
   "loaded": [{"model": "comfy", "state": "ready"}], "held": 0}]}
 ```
 
@@ -207,5 +222,6 @@ condition endpoint has timed out twice since it last read true:
 ```
 
 The busy probe only runs during a drain, so `busy` is the latest drain's
-reading. `held` counts requests waiting at the
+reading. `drains` counts the drains run since startup, one per stop
+episode. `held` counts requests waiting at the
 tenant gate, not requests queued behind a swap.

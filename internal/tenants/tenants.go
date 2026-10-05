@@ -55,8 +55,10 @@ type tenant struct {
 	busyErrAt  time.Time
 	busyErrors int // busy probes failed in a row; 0 after a reading
 
-	drainMu   sync.Mutex
-	drainDone chan struct{} // non-nil while a drain runs
+	drainMu  sync.Mutex // guards episodes, run and drains; see episode.go
+	episodes []*episode // open stop episodes
+	run      *drainRun  // the drain in progress, if any
+	drains   int        // drains run since start
 }
 
 // Manager holds the tenants and their polled state. A nil *Manager has no
@@ -270,27 +272,19 @@ func (m *Manager) StopHook(model string) func(unloadTimeout time.Duration) {
 	return func(unloadTimeout time.Duration) { m.drain(t, model, unloadTimeout) }
 }
 
-// drain waits until t's busy probe reads false, for at most unloadTimeout,
-// then runs its drain action. A busy probe that errors or times out counts as
-// busy, so an unreachable job endpoint never cuts off a running job before
-// unloadTimeout. Each probe gets at most one interval. Concurrent stops of the
-// same tenant share one drain.
+// drain waits until t's busy probe reads false, then runs its drain action,
+// both before one deadline unloadTimeout from the start. A busy probe that
+// errors or times out counts as busy, so an unreachable job endpoint never cuts
+// off a running job before unloadTimeout. Each probe gets at most one interval.
+// Stops of the same tenant in one stop episode share one drain, whose
+// unloadTimeout is the largest among them.
 func (m *Manager) drain(t *tenant, model string, unloadTimeout time.Duration) {
-	t.drainMu.Lock()
-	if done := t.drainDone; done != nil {
-		t.drainMu.Unlock()
-		<-done
+	run, unloadTimeout, runs := m.joinDrain(t, model, unloadTimeout)
+	if !runs {
 		return
 	}
-	done := make(chan struct{})
-	t.drainDone = done
-	t.drainMu.Unlock()
-	defer func() {
-		t.drainMu.Lock()
-		t.drainDone = nil
-		t.drainMu.Unlock()
-		close(done)
-	}()
+	defer t.endDrain(run)
+	deadline := time.Now().Add(unloadTimeout)
 
 	m.mu.Lock()
 	why := "stop requested (unload, swap or shutdown)"
@@ -306,7 +300,6 @@ func (m *Manager) drain(t *tenant, model string, unloadTimeout time.Duration) {
 	}
 	step("", fmt.Sprintf("draining before stopping %s: %s (unloadTimeout %s)", model, why, unloadTimeout))
 	if t.cfg.Busy != nil {
-		deadline := time.Now().Add(unloadTimeout)
 		probe := "busy not read"
 		stopping := fmt.Sprintf("busy probe did not answer within %s, stopping anyway", unloadTimeout)
 		for {
@@ -354,8 +347,10 @@ func (m *Manager) drain(t *tenant, model string, unloadTimeout time.Duration) {
 			time.Sleep(min(t.interval, time.Until(deadline)))
 		}
 	}
-	if t.cfg.Drain != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), unloadTimeout)
+	if t.cfg.Drain != nil && time.Until(deadline) <= 0 {
+		warn("", fmt.Sprintf("drain action skipped: no time left of unloadTimeout %s", unloadTimeout))
+	} else if t.cfg.Drain != nil {
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
 		out, err := runAction(ctx, t.cfg.Drain)
 		cancel()
 		if err != nil {

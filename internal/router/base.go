@@ -216,6 +216,7 @@ func (b *baseRouter) GrantServe(req scheduler.HandlerReq, modelID string) bool {
 // StopProcesses implements scheduler.Effects, stopping the named processes in
 // parallel and blocking until all have stopped.
 func (b *baseRouter) StopProcesses(timeout time.Duration, ids []string) {
+	defer b.beginStops(ids)()
 	var wg sync.WaitGroup
 	for _, id := range ids {
 		p, ok := b.processes[id]
@@ -258,6 +259,7 @@ func (b *baseRouter) trackedServe(modelID string, p process.Process) http.Handle
 func (b *baseRouter) doSwap(modelID string, toStop []string) {
 	timeout := b.healthCheckTimeout()
 
+	endStops := b.beginStops(toStop)
 	var wg sync.WaitGroup
 	for _, mID := range toStop {
 		wg.Add(1)
@@ -269,6 +271,7 @@ func (b *baseRouter) doSwap(modelID string, toStop []string) {
 		}(b.processes[mID], mID)
 	}
 	wg.Wait()
+	endStops()
 
 	// EnsureReady rather than a State() check followed by Run: the router must
 	// not assume anything about the process. Deciding out here means acting on
@@ -309,6 +312,7 @@ func (b *baseRouter) handleShutdown(req shutdownReq) {
 		stopTimeout = b.healthCheckTimeout()
 	}
 
+	defer b.beginStopsAll()()
 	var wg sync.WaitGroup
 	for i, p := range b.processes {
 		wg.Add(1)
@@ -432,6 +436,7 @@ func (b *baseRouter) Unload(timeout time.Duration, models ...string) {
 	if len(targets) == 0 {
 		return
 	}
+	defer b.beginStops(targets)()
 
 	if timeout > 0 {
 		b.sendUnload(targets, timeout)

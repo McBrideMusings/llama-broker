@@ -1,9 +1,12 @@
 package router
 
 import (
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
+	"github.com/mostlygeek/llama-swap/internal/process"
 	"github.com/mostlygeek/llama-swap/internal/tenants"
 )
 
@@ -85,10 +88,35 @@ func (b *baseRouter) Wake() {
 	}
 }
 
+// beginStops opens a tenant stop episode for a batch of processes about to
+// stop together, so each tenant among them drains once. Processes already
+// stopped are left out: they run no drain and must not widen its deadline.
+// Call the returned func after the batch has stopped.
+func (b *baseRouter) beginStops(ids []string) (end func()) {
+	timeouts := make(map[string]time.Duration, len(ids))
+	for _, id := range ids {
+		p, ok := b.processes[id]
+		if !ok {
+			continue
+		}
+		if st := p.State(); st == process.StateStopped || st == process.StateShutdown {
+			continue
+		}
+		timeouts[id] = b.unloadTimeout(id)
+	}
+	return b.tenants.BeginStops(timeouts)
+}
+
+// beginStopsAll is beginStops for every process, as shutdown stops them.
+func (b *baseRouter) beginStopsAll() (end func()) {
+	return b.beginStops(slices.Collect(maps.Keys(b.processes)))
+}
+
 // StopModels implements tenants.Router. It stops the processes directly rather
 // than through Unload, which would fail the requests the tenant gate is
 // holding for these models; those wait in the queue until the gate opens.
 func (b *baseRouter) StopModels(ids ...string) {
+	defer b.beginStops(ids)()
 	var wg sync.WaitGroup
 	for _, id := range ids {
 		p, ok := b.processes[id]

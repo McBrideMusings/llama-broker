@@ -622,7 +622,10 @@ hooks:
 #   a lower-priority tenant is held (or refused with HTTP 503), and running models
 #   of lower tenants are drained and stopped before the higher tenant loads
 # - a drain polls the busy probe until it reads false, a failed probe counting as
-#   busy (at most the model's unloadTimeout), runs the drain action, then stops the model
+#   busy, runs the drain action, then stops the model; the wait and the action
+#   share one unloadTimeout of the model
+# - a tenant drains once per stop episode: the stops of its models that one
+#   preempt, swap, unload or shutdown makes together
 # - models no tenant owns are never held, refused or drained
 # - see the knowledge base guide guides/routing/tenants
 tenants:

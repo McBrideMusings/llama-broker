@@ -98,15 +98,18 @@ func TestTenants_DrainBusyProbeFailingBoundedByUnloadTimeout(t *testing.T) {
 	if took := time.Since(start); took < 200*time.Millisecond || took > 2*time.Second {
 		t.Fatalf("drain with a failing busy probe took %s, want about the 200ms unloadTimeout", took)
 	}
-	if !freed.Load() {
-		t.Fatal("drain action did not run after unloadTimeout")
+	if freed.Load() {
+		t.Fatal("drain action ran after the busy wait spent unloadTimeout")
 	}
 	busy := *m.Status(nil, nil).Tenants[0].Busy
 	if busy.Result != nil || busy.Errors < 2 || busy.LastError == "" {
 		t.Fatalf("busy status %+v, want result null and the failures counted", busy)
 	}
-	if history := string(log.GetHistory()); !strings.Contains(history, "busy probe still failing after 200ms") {
-		t.Fatalf("log is missing the stopping-anyway warning:\n%s", history)
+	history := string(log.GetHistory())
+	for _, line := range []string{"busy probe still failing after 200ms", "drain action skipped: no time left of unloadTimeout 200ms"} {
+		if !strings.Contains(history, line) {
+			t.Fatalf("log is missing %q:\n%s", line, history)
+		}
 	}
 }
 

@@ -185,6 +185,7 @@ type TenantStatus struct {
 	// tenant drains, so this is the reading from the latest drain.
 	Busy     *ProbeStatus  `json:"busy"` // nil when not configured
 	Draining bool          `json:"draining"`
+	Drains   int           `json:"drains"` // drains run since start; one per stop episode
 	Stopping bool          `json:"stopping"`
 	Loaded   []LoadedModel `json:"loaded"`
 	// Held counts requests for the tenant's models waiting at the tenant gate.
@@ -238,7 +239,8 @@ func (m *Manager) Status(running map[string]process.ProcessState, held map[strin
 			ts.Busy = probeStatus(t.busy, t.busyAt, t.busyErr, t.busyErrAt, t.busyErrors)
 		}
 		t.drainMu.Lock()
-		ts.Draining = t.drainDone != nil
+		ts.Draining = t.run != nil
+		ts.Drains = t.drains
 		t.drainMu.Unlock()
 		for _, id := range t.cfg.Members {
 			if state, ok := running[id]; ok {

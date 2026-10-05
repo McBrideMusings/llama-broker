@@ -116,8 +116,9 @@ func runCmd(ctx context.Context, cmdStr string) (int, string, error) {
 		return -1, "", err
 	}
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	// A child that inherits the output pipe would otherwise keep
-	// CombinedOutput waiting after ctx kills the command.
+	killTreeOnCancel(cmd)
+	// Backstop for a child that left the process group and still holds the
+	// output pipe: CombinedOutput gives up waiting for it after this.
 	cmd.WaitDelay = time.Second
 	out, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(out))
