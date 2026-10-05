@@ -1,0 +1,227 @@
+package tenants
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/mostlygeek/llama-swap/internal/event"
+	"github.com/mostlygeek/llama-swap/internal/process"
+	"github.com/mostlygeek/llama-swap/internal/swaputil"
+)
+
+// Action is what a tenant decision did.
+type Action string
+
+const (
+	ActionHold   Action = "hold"   // a request waits in the queue
+	ActionRefuse Action = "refuse" // a request fails with a 503
+	ActionDrain  Action = "drain"  // a step of draining a tenant before its stop
+	ActionStop   Action = "stop"   // a tenant's running models are stopped
+	ActionLoad   Action = "load"   // a tenant's model starts loading
+)
+
+// TenantDecisionEventID is outside the range upstream's swaputil event IDs use.
+const TenantDecisionEventID = 0x40
+
+// Decision is one brokering decision: the log writes it as one line and the
+// event stream carries it as a TenantDecisionEvent.
+type Decision struct {
+	Time   time.Time `json:"time"`
+	Tenant string    `json:"tenant"`
+	Model  string    `json:"model,omitempty"`
+	Action Action    `json:"action"`
+	// Probe is the probe reading the decision rests on, with its raw value,
+	// e.g. "condition of hi: true (HTTP 200, on=true)".
+	Probe  string `json:"probe,omitempty"`
+	Reason string `json:"reason"`
+}
+
+// TenantDecisionEvent carries a Decision on the process-wide event bus.
+type TenantDecisionEvent struct {
+	Decision
+}
+
+func (e TenantDecisionEvent) Type() uint32 { return TenantDecisionEventID }
+
+// record logs d as one info line and emits it as an event.
+func (m *Manager) record(d Decision) { m.recordAt(m.log.Infof, d) }
+
+// recordAt is record with the log level's printf, for decisions that log at
+// warn.
+func (m *Manager) recordAt(logf func(string, ...any), d Decision) {
+	d.Time = time.Now().UTC()
+	logf("tenants: decision time=%s tenant=%s model=%s action=%s probe=%q reason=%q",
+		d.Time.Format(time.RFC3339Nano), d.Tenant, d.Model, d.Action, d.Probe, d.Reason)
+	event.Emit(TenantDecisionEvent{d})
+}
+
+// Record logs the scheduler's hold or refuse of a request for model, blocked
+// for reason.
+func (m *Manager) Record(model string, reason error, refuse bool) {
+	if m == nil || reason == nil {
+		return
+	}
+	t := m.byModel[model]
+	if t == nil {
+		return
+	}
+	action := ActionHold
+	if refuse {
+		action = ActionRefuse
+	}
+	// The probe behind a block is the condition of the tenant that wants the
+	// GPU: the blocker's, or t's own while it waits for a lower tenant.
+	by := t
+	var blocked *BlockedError
+	if errors.As(reason, &blocked) {
+		by = m.byName(blocked.By)
+	}
+	m.mu.Lock()
+	probe := by.conditionLocked()
+	m.mu.Unlock()
+	m.record(Decision{Tenant: t.name, Model: model, Action: action, Probe: probe, Reason: reason.Error()})
+}
+
+func (m *Manager) byName(name string) *tenant {
+	for _, t := range m.tenants {
+		if t.name == name {
+			return t
+		}
+	}
+	return nil
+}
+
+// conditionLocked describes t's last condition reading for a decision.
+func (t *tenant) conditionLocked() string {
+	switch {
+	case t == nil:
+		return ""
+	case t.cfg.Condition == nil:
+		return fmt.Sprintf("condition of %s: none configured", t.name)
+	case t.condAt.IsZero():
+		return fmt.Sprintf("condition of %s: not probed yet", t.name)
+	default:
+		return fmt.Sprintf("condition of %s: %s", t.name, t.cond)
+	}
+}
+
+// recordLoads logs a load decision whenever a tenant's model starts, until ctx
+// is cancelled.
+func (m *Manager) recordLoads(ctx context.Context) {
+	cancel := event.On(func(e swaputil.ProcessStateChangeEvent) {
+		if e.NewState != string(process.StateStarting) {
+			return
+		}
+		t := m.byModel[e.ProcessName]
+		if t == nil {
+			return
+		}
+		m.mu.Lock()
+		probe := t.conditionLocked()
+		reason := "no higher-priority tenant wants the GPU"
+		if h := m.blockerLocked(t); h != nil {
+			// Loads bypassing the scheduler (preload) are not gated.
+			reason = fmt.Sprintf("loading although tenant %s (priority %d) wants the GPU", h.name, h.cfg.Priority)
+		}
+		m.mu.Unlock()
+		m.record(Decision{Tenant: t.name, Model: e.ProcessName, Action: ActionLoad, Probe: probe, Reason: reason})
+	})
+	go func() {
+		<-ctx.Done()
+		cancel()
+	}()
+}
+
+// Status is the GET /api/tenants body.
+type Status struct {
+	Tenants []TenantStatus `json:"tenants"`
+}
+
+// TenantStatus is one tenant's current state, highest priority first.
+type TenantStatus struct {
+	Name      string   `json:"name"`
+	Priority  int      `json:"priority"`
+	OnBlocked string   `json:"onBlocked"`
+	Models    []string `json:"models"`
+	// WantsGPU is the last condition reading; always false without a condition.
+	WantsGPU  bool         `json:"wantsGPU"`
+	Condition *ProbeStatus `json:"condition"` // nil when not configured
+	// Busy is the last busy probe reading. The busy probe runs only while the
+	// tenant drains, so this is the reading from the latest drain.
+	Busy     *ProbeStatus  `json:"busy"` // nil when not configured
+	Draining bool          `json:"draining"`
+	Stopping bool          `json:"stopping"`
+	Loaded   []LoadedModel `json:"loaded"`
+	// Held counts requests for the tenant's models waiting at the tenant gate.
+	Held int `json:"held"`
+}
+
+// ProbeStatus is a probe's last reading. Result and ProbedAt are null before
+// the first reading.
+type ProbeStatus struct {
+	Result   *bool      `json:"result"`
+	Raw      string     `json:"raw,omitempty"`
+	Error    string     `json:"error,omitempty"`
+	ProbedAt *time.Time `json:"probedAt"`
+}
+
+type LoadedModel struct {
+	Model string `json:"model"`
+	State string `json:"state"`
+}
+
+// Status reports every tenant. running is the router's processes that are not
+// stopped; held counts held requests by model.
+func (m *Manager) Status(running map[string]process.ProcessState, held map[string]int) Status {
+	st := Status{Tenants: []TenantStatus{}}
+	if m == nil {
+		return st
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, t := range m.tenants {
+		ts := TenantStatus{
+			Name:      t.name,
+			Priority:  t.cfg.Priority,
+			OnBlocked: t.cfg.OnBlocked,
+			Models:    append([]string{}, t.cfg.Members...),
+			WantsGPU:  t.wants,
+			Stopping:  t.stopping,
+			Loaded:    []LoadedModel{},
+		}
+		if t.cfg.Condition != nil {
+			ts.Condition = probeStatus(t.cond, t.condAt)
+		}
+		if t.cfg.Busy != nil {
+			ts.Busy = probeStatus(t.busy, t.busyAt)
+		}
+		t.drainMu.Lock()
+		ts.Draining = t.drainDone != nil
+		t.drainMu.Unlock()
+		for _, id := range t.cfg.Members {
+			if state, ok := running[id]; ok {
+				ts.Loaded = append(ts.Loaded, LoadedModel{Model: id, State: string(state)})
+			}
+			ts.Held += held[id]
+		}
+		st.Tenants = append(st.Tenants, ts)
+	}
+	return st
+}
+
+func probeStatus(r probeResult, at time.Time) *ProbeStatus {
+	ps := &ProbeStatus{}
+	if at.IsZero() {
+		return ps
+	}
+	ok := r.ok
+	ps.Result = &ok
+	ps.Raw = r.raw
+	if r.err != nil {
+		ps.Error = r.err.Error()
+	}
+	ps.ProbedAt = &at
+	return ps
+}

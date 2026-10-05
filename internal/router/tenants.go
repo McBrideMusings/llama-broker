@@ -3,6 +3,8 @@ package router
 import (
 	"sync"
 	"time"
+
+	"github.com/mostlygeek/llama-swap/internal/tenants"
 )
 
 // start wires the tenant stop hooks into the processes, starts tenant polling
@@ -27,6 +29,34 @@ func (b *baseRouter) start() {
 // TenantBlock implements scheduler.TenantGate.
 func (b *baseRouter) TenantBlock(model string) (error, bool) {
 	return b.tenants.Block(model)
+}
+
+// TenantRecord implements scheduler.TenantGate.
+func (b *baseRouter) TenantRecord(model string, reason error, refuse bool) {
+	b.tenants.Record(model, reason, refuse)
+}
+
+// publishHeld stores the scheduler's held-request counts for TenantStatus. It
+// runs on the run-loop goroutine, the only one that may read the queue.
+func (b *baseRouter) publishHeld() {
+	if b.tenants == nil {
+		return
+	}
+	h, ok := b.schedule.(interface{ HeldRequests() map[string]int })
+	if !ok {
+		return
+	}
+	held := h.HeldRequests()
+	b.held.Store(&held)
+}
+
+// TenantStatus reports every tenant's state for GET /api/tenants.
+func (b *baseRouter) TenantStatus() tenants.Status {
+	var held map[string]int
+	if p := b.held.Load(); p != nil {
+		held = *p
+	}
+	return b.tenants.Status(b.RunningModels(), held)
 }
 
 // Wake implements tenants.Router. The send never blocks: one pending wake

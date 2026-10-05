@@ -107,7 +107,7 @@ func (s *FIFO) OnRequest(req HandlerReq) {
 	// here or held in the queue below until OnTenantsChanged.
 	blocked, refuse := s.tenantBlock(req.Model)
 	if blocked != nil && refuse {
-		s.logger.Infof("%s: refusing request for model %s: %v", s.name, req.Model, blocked)
+		s.tenantRecord(req.Model, blocked, true)
 		s.rejectAdmission(req, blocked)
 		return
 	}
@@ -117,7 +117,7 @@ func (s *FIFO) OnRequest(req HandlerReq) {
 	}
 
 	if blocked != nil {
-		s.logger.Infof("%s: holding request for model %s: %v", s.name, req.Model, blocked)
+		s.tenantRecord(req.Model, blocked, false)
 		s.enqueue(req)
 		return
 	}
@@ -433,6 +433,7 @@ func (s *FIFO) drainQueue() {
 		}
 		if blocked, refuse := s.tenantBlock(req.Model); blocked != nil {
 			if refuse {
+				s.tenantRecord(req.Model, blocked, true)
 				s.grantError(req, blocked)
 			} else {
 				remaining = append(remaining, req)

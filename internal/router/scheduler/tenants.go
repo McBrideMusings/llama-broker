@@ -8,6 +8,9 @@ type TenantGate interface {
 	// refuse says to fail the request with the reason instead of holding it
 	// in the queue.
 	TenantBlock(model string) (reason error, refuse bool)
+	// TenantRecord logs that a request for model was held (refuse false)
+	// or refused because of reason.
+	TenantRecord(model string, reason error, refuse bool)
 }
 
 // tenantBlock asks the gate about model; without a gate nothing is blocked.
@@ -22,4 +25,23 @@ func (s *FIFO) tenantBlock(model string) (error, bool) {
 // lower tenant finished stopping, so held requests can proceed.
 func (s *FIFO) OnTenantsChanged() {
 	s.drainQueue()
+}
+
+// tenantRecord reports a hold or refuse to the gate.
+func (s *FIFO) tenantRecord(model string, reason error, refuse bool) {
+	if s.gate != nil {
+		s.gate.TenantRecord(model, reason, refuse)
+	}
+}
+
+// HeldRequests counts queued requests the tenant gate blocks, by model. It
+// reads the queue, so only the run-loop goroutine may call it.
+func (s *FIFO) HeldRequests() map[string]int {
+	held := make(map[string]int)
+	for _, req := range s.queued {
+		if blocked, _ := s.tenantBlock(req.Model); blocked != nil {
+			held[req.Model]++
+		}
+	}
+	return held
 }

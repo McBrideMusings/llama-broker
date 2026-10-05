@@ -636,6 +636,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			}),
 			event.On(func(e ActivityLogEvent) { sendActivity(e.Metrics.ID) }),
 			event.On(func(e swaputil.InFlightRequestsEvent) { sendInFlight(e) }),
+			onTenantDecision(send),
 		}
 
 		// initial payload

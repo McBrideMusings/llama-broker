@@ -65,6 +65,9 @@ type baseRouter struct {
 	// wakes coalesce) asks the run loop to re-check requests it holds.
 	tenants *tenants.Manager
 	wakeCh  chan struct{}
+	// held is the run loop's latest count of tenant-held requests by model,
+	// published for readers outside the run loop.
+	held atomic.Pointer[map[string]int]
 
 	runDone chan struct{}
 
@@ -122,6 +125,7 @@ func (b *baseRouter) run() {
 	defer close(b.runDone)
 
 	for {
+		b.publishHeld()
 		select {
 		case req := <-b.shutdownCh:
 			b.handleShutdown(req)

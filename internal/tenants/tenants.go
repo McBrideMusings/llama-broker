@@ -39,9 +39,13 @@ type tenant struct {
 	cfg      config.TenantConfig
 	interval time.Duration
 
-	// wants and stopping are guarded by Manager.mu.
+	// wants, stopping and the last probe readings are guarded by Manager.mu.
 	wants    bool
 	stopping bool
+	cond     probeResult
+	condAt   time.Time
+	busy     probeResult
+	busyAt   time.Time
 
 	drainMu   sync.Mutex
 	drainDone chan struct{} // non-nil while a drain runs
@@ -90,6 +94,7 @@ func (m *Manager) Start(ctx context.Context, r Router) {
 	m.mu.Lock()
 	m.router = r
 	m.mu.Unlock()
+	m.recordLoads(ctx)
 	for _, t := range m.tenants {
 		if t.cfg.Condition != nil {
 			go m.poll(ctx, t)
@@ -172,6 +177,7 @@ func (m *Manager) checkCondition(ctx context.Context, t *tenant) {
 	m.mu.Lock()
 	changed := t.wants != res.ok
 	t.wants = res.ok
+	t.cond, t.condAt = res, time.Now().UTC()
 	router := m.router
 	m.mu.Unlock()
 
@@ -209,8 +215,10 @@ func (m *Manager) preempt() {
 			continue
 		}
 		l.stopping = true
-		m.log.Infof("tenants: stopping %s (priority %d) %v to make room for %s (priority %d)", l.name, l.cfg.Priority, ids, h.name, h.cfg.Priority)
+		reason := fmt.Sprintf("stopping %v to make room for tenant %s (priority %d)", ids, h.name, h.cfg.Priority)
+		probe := h.conditionLocked()
 		go func(l *tenant, ids []string) {
+			m.record(Decision{Tenant: l.name, Action: ActionStop, Probe: probe, Reason: reason})
 			router.StopModels(ids...)
 			m.log.Infof("tenants: %s stopped %v", l.name, ids)
 			m.mu.Lock()
@@ -264,23 +272,39 @@ func (m *Manager) drain(t *tenant, model string, unloadTimeout time.Duration) {
 		close(done)
 	}()
 
-	m.log.Infof("tenants: draining %s before stopping %s (unloadTimeout %s)", t.name, model, unloadTimeout)
+	m.mu.Lock()
+	why := "stop requested (unload, swap or shutdown)"
+	if t.stopping {
+		why = "preempted by a higher-priority tenant"
+	}
+	m.mu.Unlock()
+	step := func(probe, reason string) {
+		m.record(Decision{Tenant: t.name, Model: model, Action: ActionDrain, Probe: probe, Reason: reason})
+	}
+	warn := func(probe, reason string) {
+		m.recordAt(m.log.Warnf, Decision{Tenant: t.name, Model: model, Action: ActionDrain, Probe: probe, Reason: reason})
+	}
+	step("", fmt.Sprintf("draining before stopping %s: %s (unloadTimeout %s)", model, why, unloadTimeout))
 	if t.cfg.Busy != nil {
 		deadline := time.Now().Add(unloadTimeout)
 		for {
 			ctx, cancel := context.WithDeadline(context.Background(), deadline)
 			res := runProbe(ctx, t.cfg.Busy)
 			cancel()
+			m.mu.Lock()
+			t.busy, t.busyAt = res, time.Now().UTC()
+			m.mu.Unlock()
+			probe := "busy " + res.String()
 			if !res.ok {
-				m.log.Infof("tenants: %s idle, busy probe %s", t.name, res)
+				step(probe, "idle")
 				break
 			}
 			left := time.Until(deadline)
 			if left <= 0 {
-				m.log.Warnf("tenants: %s still busy after %s, stopping anyway; busy probe %s", t.name, unloadTimeout, res)
+				warn(probe, fmt.Sprintf("still busy after %s, stopping anyway", unloadTimeout))
 				break
 			}
-			m.log.Infof("tenants: %s busy, busy probe %s; waiting", t.name, res)
+			step(probe, "busy, waiting")
 			time.Sleep(min(t.interval, left))
 		}
 	}
@@ -289,9 +313,9 @@ func (m *Manager) drain(t *tenant, model string, unloadTimeout time.Duration) {
 		out, err := runAction(ctx, t.cfg.Drain)
 		cancel()
 		if err != nil {
-			m.log.Warnf("tenants: %s drain action failed: %v %s", t.name, err, out)
+			warn("", fmt.Sprintf("drain action failed: %v %s", err, out))
 		} else {
-			m.log.Infof("tenants: %s drain action done: %s", t.name, out)
+			step("", "drain action done: "+out)
 		}
 	}
 	m.log.Infof("tenants: %s drained, stopping %s", t.name, model)

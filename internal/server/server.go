@@ -403,6 +403,7 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/profiles/active", apiChain.ThenFunc(s.handleAPIActiveProfile))
 	mux.Handle("POST /api/inflight/{id}/cancel", apiChain.ThenFunc(s.handleAPICancelInflight))
 	mux.Handle("GET /api/events", apiChain.ThenFunc(s.handleAPIEvents))
+	mux.Handle("GET /api/tenants", apiChain.ThenFunc(s.handleAPITenants))
 	mux.Handle("GET /api/events/logs", apiChain.ThenFunc(s.handleAPILogEvents))
 	mux.Handle("GET /api/metrics/activity", apiChain.ThenFunc(s.handleAPIActivity))
 	mux.Handle("GET /api/metrics/stats", apiChain.ThenFunc(s.handleAPIActivityStats))

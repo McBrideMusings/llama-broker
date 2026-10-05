@@ -82,8 +82,35 @@ Stops of two models from one tenant share a single drain.
   wants the GPU. Use `onBlocked: refuse` when clients would rather retry.
 - **A render is cut off.** The drain waits at most `unloadTimeout`. Raise the
   model's `unloadTimeout` to cover your longest job.
-- The log shows every step at info level, with each probe's raw reading:
-  `tenants: hi (priority 10) condition true (HTTP 200, on=true)`,
-  `holding request for model ...`, `tenants: draining ...`,
-  `tenants: comfy busy, busy probe true (...)`, `tenants: comfy drain action done`,
-  `tenants: comfy stopped [comfy]`.
+- **Something happened and you want to know why.** Read the decision log
+  lines or `GET /api/tenants`, below.
+
+## Watching decisions and state
+
+Every hold, refuse, drain step, stop and load of a tenant's model writes one
+info line with the time, tenant, model, action, the probe reading it rests on
+(raw value included) and the reason:
+
+```text
+tenants: decision time=2026-10-04T20:15:02.1Z tenant=chat model=qwen action=hold probe="condition of game-streaming: true (HTTP 200, active=true)" reason="model qwen (tenant chat, priority 1) is blocked: tenant game-streaming (priority 100) wants the GPU"
+tenants: decision time=2026-10-04T20:15:03.4Z tenant=comfy model=comfy action=drain probe="busy true (HTTP 200, queue_running=[[\"job\"]])" reason="busy, waiting"
+```
+
+Condition changes log as `tenants: <name> (priority N) condition true (...)`.
+The same decisions go out on `GET /api/events` as `tenantDecision` messages
+whose data is `{time, tenant, model, action, probe, reason}`.
+
+`GET /api/tenants` returns each tenant, highest priority first:
+
+```json
+{"tenants": [{"name": "comfy", "priority": 10, "onBlocked": "hold",
+  "models": ["comfy"], "wantsGPU": false, "condition": null,
+  "busy": {"result": false, "raw": "HTTP 200, queue_running=[]", "probedAt": "2026-10-04T20:15:09Z"},
+  "draining": false, "stopping": false,
+  "loaded": [{"model": "comfy", "state": "ready"}], "held": 0}]}
+```
+
+`condition` and `busy` are `null` when not configured, and their `result` is
+`null` before the first reading. The busy probe only runs during a drain, so
+`busy` is the latest drain's reading. `held` counts requests waiting at the
+tenant gate, not requests queued behind a swap.

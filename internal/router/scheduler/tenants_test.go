@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/mostlygeek/llama-swap/internal/process"
@@ -12,10 +13,19 @@ type gatedEffects struct {
 	*fakeEffects
 	blocked map[string]error
 	refuse  map[string]bool
+	records []string // "hold lo", "refuse lo"
 }
 
 func (g *gatedEffects) TenantBlock(model string) (error, bool) {
 	return g.blocked[model], g.refuse[model]
+}
+
+func (g *gatedEffects) TenantRecord(model string, reason error, refuse bool) {
+	action := "hold"
+	if refuse {
+		action = "refuse"
+	}
+	g.records = append(g.records, action+" "+model)
 }
 
 func newGatedEffects() *gatedEffects {
@@ -99,5 +109,32 @@ func TestTenants_FIFORefusesQueuedRequestOnceBlocked(t *testing.T) {
 	}
 	if len(s.queued) != 0 {
 		t.Fatalf("queued=%d want 0", len(s.queued))
+	}
+}
+
+func TestTenants_FIFORecordsDecisionsAndCountsHeld(t *testing.T) {
+	eff := newGatedEffects()
+	eff.states["lo"] = process.StateReady
+	eff.states["refused"] = process.StateStopped
+	eff.states["free"] = process.StateStopped
+	eff.blocked["lo"] = errors.New("tenant hi wants the GPU")
+	eff.blocked["refused"] = errors.New("tenant hi wants the GPU")
+	eff.refuse["refused"] = true
+	s := newFIFO(&stubPlanner{evict: map[string][]string{"free": {"other"}}}, eff)
+	eff.states["other"] = process.StateReady
+	s.OnRequest(reqCh("other"))
+
+	for _, m := range []string{"lo", "lo", "refused", "free"} {
+		s.OnRequest(reqCh(m))
+	}
+	// A wake while still blocked re-checks the queue without logging again.
+	s.OnTenantsChanged()
+
+	if got, want := strings.Join(eff.records, ","), "hold lo,hold lo,refuse refused"; got != want {
+		t.Fatalf("records %q want %q", got, want)
+	}
+	held := s.HeldRequests()
+	if len(held) != 1 || held["lo"] != 2 {
+		t.Fatalf("held %v want map[lo:2] (free is queued behind a busy process, not held)", held)
 	}
 }

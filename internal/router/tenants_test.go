@@ -135,6 +135,15 @@ tenants:
 		t.Fatalf("lo request finished (%d) while hi wants the GPU; want it held", lo.code)
 	case <-time.After(time.Second):
 	}
+	// The run loop publishes the held count; the status reads it from there.
+	for _, ts := range rt.TenantStatus().Tenants {
+		switch {
+		case ts.Name == "lo" && (ts.Held != 1 || len(ts.Loaded) != 0):
+			t.Errorf("status lo held=%d loaded=%v, want 1 held and nothing loaded", ts.Held, ts.Loaded)
+		case ts.Name == "hi" && (!ts.WantsGPU || len(ts.Loaded) != 1 || ts.Held != 0):
+			t.Errorf("status hi wantsGPU=%v loaded=%v held=%d, want true, [hi], 0", ts.WantsGPU, ts.Loaded, ts.Held)
+		}
+	}
 	cleared := time.Now()
 	hiWants.Store(false)
 	var lo result
@@ -160,20 +169,22 @@ tenants:
 	history := string(logs.ProxyLogs.GetHistory())
 	order := []string{
 		"tenants: hi (priority 10) condition true",
-		"tenants: stopping lo (priority 1) [lo]",
-		"tenants: draining lo before stopping lo",
-		"tenants: lo busy",
-		"tenants: lo idle",
-		"tenants: lo drain action done",
+		`tenant=lo model= action=stop probe="condition of hi: true (HTTP 200, on=true)" reason="stopping [lo] to make room for tenant hi (priority 10)"`,
+		`tenant=lo model=lo action=drain probe="" reason="draining before stopping lo: preempted by a higher-priority tenant (unloadTimeout 10s)"`,
+		`tenant=lo model=lo action=drain probe="busy true (HTTP 200, busy=true)" reason="busy, waiting"`,
+		`tenant=lo model=lo action=drain probe="busy false (HTTP 200, busy=false)" reason="idle"`,
+		`tenant=lo model=lo action=drain probe="" reason="drain action done: HTTP 200 {}"`,
 		"tenants: lo drained, stopping lo",
 		"tenants: lo stopped [lo]",
+		`tenant=hi model=hi action=load probe="condition of hi: true (HTTP 200, on=true)" reason="no higher-priority tenant wants the GPU"`,
 		"<hi> Health check passed",
 		"tenants: hi (priority 10) condition false",
+		`tenant=lo model=lo action=load probe="condition of lo: none configured" reason="no higher-priority tenant wants the GPU"`,
 		"<lo> Health check passed",
 	}
 	for _, held := range []string{
-		"holding request for model hi: tenant hi waits for lower tenant lo to stop",
-		"holding request for model lo: model lo (tenant lo, priority 1) is blocked: tenant hi (priority 10) wants the GPU",
+		`tenant=hi model=hi action=hold probe="condition of hi: true (HTTP 200, on=true)" reason="tenant hi waits for lower tenant lo to stop [lo]"`,
+		`tenant=lo model=lo action=hold probe="condition of hi: true (HTTP 200, on=true)" reason="model lo (tenant lo, priority 1) is blocked: tenant hi (priority 10) wants the GPU"`,
 	} {
 		if !strings.Contains(history, held) {
 			t.Errorf("log has no %q; log:\n%s", held, history)
