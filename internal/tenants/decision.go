@@ -100,18 +100,24 @@ func (m *Manager) byName(name string) *tenant {
 	return nil
 }
 
-// conditionLocked describes t's last condition reading for a decision.
+// conditionLocked describes t's last condition reading for a decision, and the
+// failed probes since it, if any.
 func (t *tenant) conditionLocked() string {
+	var s string
 	switch {
 	case t == nil:
 		return ""
 	case t.cfg.Condition == nil:
 		return fmt.Sprintf("condition of %s: none configured", t.name)
 	case t.condAt.IsZero():
-		return fmt.Sprintf("condition of %s: not probed yet", t.name)
+		s = fmt.Sprintf("condition of %s: not read yet", t.name)
 	default:
-		return fmt.Sprintf("condition of %s: %s", t.name, t.cond)
+		s = fmt.Sprintf("condition of %s: %s", t.name, t.cond)
 	}
+	if t.condErrors > 0 {
+		s += fmt.Sprintf("; failed probes since: %d, latest: %s", t.condErrors, t.condErr.failure())
+	}
+	return s
 }
 
 // recordLoads logs a load decision whenever a tenant's model starts, until ctx
@@ -184,6 +190,12 @@ type ProbeStatus struct {
 	Raw      string     `json:"raw,omitempty"`
 	Error    string     `json:"error,omitempty"`
 	ProbedAt *time.Time `json:"probedAt"`
+	// Condition only: a failed probe leaves Result as it was. Errors counts
+	// failures since the last reading; LastError and LastErrorAt describe the
+	// latest failure and stay after a reading succeeds.
+	Errors      int        `json:"errors,omitempty"`
+	LastError   string     `json:"lastError,omitempty"`
+	LastErrorAt *time.Time `json:"lastErrorAt,omitempty"`
 }
 
 type LoadedModel struct {
@@ -214,6 +226,12 @@ func (m *Manager) Status(running map[string]process.ProcessState, held map[strin
 		}
 		if t.cfg.Condition != nil {
 			ts.Condition = probeStatus(t.cond, t.condAt)
+			if !t.condErrAt.IsZero() {
+				at := t.condErrAt
+				ts.Condition.Errors = t.condErrors
+				ts.Condition.LastError = t.condErr.failure()
+				ts.Condition.LastErrorAt = &at
+			}
 		}
 		if t.cfg.Busy != nil {
 			ts.Busy = probeStatus(t.busy, t.busyAt)

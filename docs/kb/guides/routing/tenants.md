@@ -55,7 +55,14 @@ tenants:
 status equals `status` (default 200). When `json` is set, the value at that
 dot path (`a.b`, `items.0.state`) must also be true, a non-zero number, or a
 non-empty string, array or object. The cmd form is true when the command
-exits 0. A probe that errors, times out or gets a different status reads false.
+exits 0. A different status, or a non-zero exit, reads false.
+
+A probe that fails is not a reading. A probe fails when the request or
+command can't run, when the body isn't JSON, or when it takes longer than
+`interval` seconds. A failed `condition` probe changes nothing: the tenant
+keeps its last reading, so a slow or briefly unreachable endpoint neither
+releases held requests nor claims the GPU. Before the first reading the tenant
+doesn't want the GPU. A failed `busy` probe during a drain reads idle.
 
 `drain` is an action: a url request (`method` defaults to POST, `body` is sent
 as JSON) or a command.
@@ -107,6 +114,14 @@ tenants: decision time=2026-10-05T14:02:11Z tenant=chat model=qwen action=hold p
   or make the condition turn true before the workload starts.
 - **A model outside every tenant still loads.** Tenants never hold, refuse or
   drain models that no tenant owns. Give each GPU model a tenant.
+- **Lower tenants stay blocked after the higher workload ended.** The
+  condition endpoint stopped answering while it read true, and a failed
+  probe keeps that reading. The first failure in a row logs a warning:
+  `tenants: <name> (priority N) condition probe failed (1 in a row): <error>;
+  keeping wants GPU: true from the reading at <time>`. `GET /api/tenants` shows
+  the count under `condition.errors`. Bring the endpoint back, or have it
+  answer false while the workload is down. A probe slower than `interval`
+  fails every poll; raise `interval`.
 - **A tenant without a `condition` never preempts anything.** It can only be
   held, refused or drained by higher tenants.
 - **Requests hang under `hold`.** They wait for as long as the higher tenant
@@ -153,6 +168,9 @@ priority first:
 ```
 
 `condition` and `busy` are `null` when not configured, and their `result` is
-`null` before the first reading. The busy probe only runs during a drain, so
+`null` before the first reading. After a condition probe fails, `condition`
+also carries `errors` (failures since the last reading, left out once one
+succeeds), `lastError` and `lastErrorAt`, and the decision line's probe ends with
+`; failed probes since: N, latest: <error>`. The busy probe only runs during a drain, so
 `busy` is the latest drain's reading. `held` counts requests waiting at the
 tenant gate, not requests queued behind a swap.

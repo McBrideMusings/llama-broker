@@ -951,7 +951,7 @@
                     "groups": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Routing groups whose members this tenant owns. Needs the group router."},
                     "priority": {"type": "integer", "default": 0, "description": "Higher priority wins the GPU."},
                     "vram": {"type": "integer", "minimum": 0, "default": 0, "description": "GPU memory in MiB this tenant uses while any of its models runs. Checked against vramReserve; with a reserve set, every model needs a tenant with vram."},
-                    "condition": {"$ref": "#/definitions/tenantProbe", "description": "Polled every interval; while true the tenant wants the GPU. Without it the tenant never preempts others."},
+                    "condition": {"$ref": "#/definitions/tenantProbe", "description": "Polled every interval; while true the tenant wants the GPU. A probe that errors or times out (after interval seconds) keeps the last reading. Without it the tenant never preempts others."},
                     "busy": {"$ref": "#/definitions/tenantProbe", "description": "Polled during a drain; the stop waits while it is true, up to the model's unloadTimeout."},
                     "drain": {"$ref": "#/definitions/tenantAction", "description": "Run once the busy probe reads false, just before the stop."},
                     "interval": {"type": "integer", "minimum": 0, "default": 5, "description": "Seconds between condition polls and between busy polls during a drain."},

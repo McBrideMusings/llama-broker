@@ -33,7 +33,8 @@ func (r probeResult) String() string {
 	return fmt.Sprintf("%v (%s)", r.ok, r.raw)
 }
 
-// runProbe evaluates p. A probe that cannot be evaluated reads false.
+// runProbe evaluates p. A probe that cannot be evaluated reads false with err
+// set; the condition poll ignores such a reading, a busy probe takes it as idle.
 func runProbe(ctx context.Context, p *config.TenantProbe) probeResult {
 	if p.Cmd != "" {
 		code, out, err := runCmd(ctx, p.Cmd)

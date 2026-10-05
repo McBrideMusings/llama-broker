@@ -638,7 +638,8 @@ tenants:
     #   when json is set, the value at that dot path is true, a non-zero number,
     #   or a non-empty string, array or object
     # - cmd form: true when the command exits 0
-    # - a probe that fails (connection refused, timeout) reads false
+    # - a probe that fails (connection refused, a timeout of interval seconds)
+    #   changes nothing: the tenant keeps its last reading, false before the first
     condition:
       url: http://127.0.0.1:9000/session
       json: active

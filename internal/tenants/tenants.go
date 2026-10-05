@@ -40,12 +40,17 @@ type tenant struct {
 	interval time.Duration
 
 	// wants, stopping and the last probe readings are guarded by Manager.mu.
-	wants    bool
-	stopping bool
-	cond     probeResult
-	condAt   time.Time
-	busy     probeResult
-	busyAt   time.Time
+	// cond holds the last condition reading that did not error; a failed probe
+	// goes to condErr and leaves cond and wants as they were.
+	wants      bool
+	stopping   bool
+	cond       probeResult
+	condAt     time.Time
+	condErr    probeResult // latest failed condition probe
+	condErrAt  time.Time
+	condErrors int // condition probes failed in a row; 0 after a reading
+	busy       probeResult
+	busyAt     time.Time
 
 	drainMu   sync.Mutex
 	drainDone chan struct{} // non-nil while a drain runs
@@ -173,7 +178,8 @@ func (m *Manager) poll(ctx context.Context, t *tenant) {
 }
 
 // checkCondition reads t's condition once, then wakes the scheduler when the
-// reading changed and stops any tenant that is now outranked.
+// reading changed and stops any tenant that is now outranked. A probe that
+// errors or times out changes nothing: the tenant keeps its last reading.
 func (m *Manager) checkCondition(ctx context.Context, t *tenant) {
 	pctx, cancel := context.WithTimeout(ctx, t.interval)
 	res := runProbe(pctx, t.cfg.Condition)
@@ -181,19 +187,14 @@ func (m *Manager) checkCondition(ctx context.Context, t *tenant) {
 	if ctx.Err() != nil {
 		return
 	}
-
+	if res.err != nil {
+		m.conditionFailed(t, res)
+	} else {
+		m.conditionRead(t, res)
+	}
 	m.mu.Lock()
-	changed := t.wants != res.ok
-	t.wants = res.ok
-	t.cond, t.condAt = res, time.Now().UTC()
 	router := m.router
 	m.mu.Unlock()
-
-	if changed {
-		m.log.Infof("tenants: %s (priority %d) condition %s; wants GPU: %v", t.name, t.cfg.Priority, res, res.ok)
-	} else {
-		m.log.Debugf("tenants: %s condition %s", t.name, res)
-	}
 	// Wake on every poll, not only on a change: a held request may also be
 	// waiting for a lower tenant's process that stopped some other way.
 	router.Wake()
