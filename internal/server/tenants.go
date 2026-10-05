@@ -7,6 +7,7 @@ import (
 
 	"github.com/mostlygeek/llama-swap/internal/event"
 	"github.com/mostlygeek/llama-swap/internal/hw"
+	"github.com/mostlygeek/llama-swap/internal/router"
 	"github.com/mostlygeek/llama-swap/internal/tenants"
 )
 
@@ -20,9 +21,9 @@ type tenantStatus interface {
 }
 
 // setTenantVRAM hands the tenant gate the card total from hardware detection
-// and the configured reserve.
-func setTenantVRAM(local any, hardware *hw.HardwareSnapshot, reserveMiB int) {
-	if v, ok := local.(interface{ SetVRAM(int64, int) }); ok {
+// and the configured reserve. Both local routers implement router.VRAMSetter.
+func setTenantVRAM(local router.LocalRouter, hardware *hw.HardwareSnapshot, reserveMiB int) {
+	if v, ok := local.(router.VRAMSetter); ok {
 		v.SetVRAM(tenants.TotalVRAMMiB(hardware), reserveMiB)
 	}
 }

@@ -50,6 +50,17 @@ func (b *baseRouter) publishHeld() {
 	b.held.Store(&held)
 }
 
+// VRAMSetter is how the server hands a local router the card total and the
+// VRAM reserve. Every local router implements it.
+type VRAMSetter interface {
+	SetVRAM(totalMiB int64, reserveMiB int)
+}
+
+var (
+	_ VRAMSetter = (*Matrix)(nil)
+	_ VRAMSetter = (*Group)(nil)
+)
+
 // SetVRAM sets the card total and the reserve the tenant gate holds loads
 // against, both in MiB.
 func (b *baseRouter) SetVRAM(totalMiB int64, reserveMiB int) {
