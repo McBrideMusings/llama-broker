@@ -92,13 +92,14 @@ probe's raw reading, and `held: 1` for the waiting prompt.
 
 ## What goes wrong
 
-- **The drain never waits.** The probe path is wrong, so ComfyUI answers a
-  status other than 200 and the probe reads false at once. After a drain has
-  run, check the `busy` reading's `raw` in `GET /api/tenants` (it is `null`
+- **The drain never waits.** The probe reads false at once, for example
+  because the `json` path matches nothing in ComfyUI's answer. After a drain
+  has run, check the `busy` reading's `raw` in `GET /api/tenants` (it is `null`
   until then). A tenant with neither `busy` nor `drain` never waits at all;
   its stops go straight through.
-- **Every stop waits the full `unloadTimeout`.** The probe host or port is
-  wrong, so every probe fails and counts as busy. The drain logs
+- **Every stop waits the full `unloadTimeout`.** The probe host, port or path
+  is wrong, so every probe fails (connection refused, or a non-2xx status such
+  as 404 or 502) and counts as busy. The drain logs
   `busy probe failed: ... connection refused` warnings, and `busy.errors` and
   `busy.lastError` in `GET /api/tenants` show the failures.
 - **A render is cut off.** It ran longer than `unloadTimeout`. Raise it on

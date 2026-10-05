@@ -21,9 +21,10 @@ const maxProbeBody = 1 << 20
 // probeResult is one probe reading. raw describes what was observed (status
 // code, JSON value, exit code) so every log line carries the real values.
 type probeResult struct {
-	ok  bool
-	raw string
-	err error
+	ok     bool
+	raw    string
+	err    error
+	status int // HTTP status of a url probe, 0 for a cmd probe
 }
 
 func (r probeResult) String() string {
@@ -51,17 +52,17 @@ func runProbe(ctx context.Context, p *config.TenantProbe) probeResult {
 	}
 	raw := fmt.Sprintf("HTTP %d", status)
 	if status != p.Status {
-		return probeResult{raw: raw + fmt.Sprintf(", want %d", p.Status)}
+		return probeResult{raw: raw + fmt.Sprintf(", want %d", p.Status), status: status}
 	}
 	if p.JSON == "" {
-		return probeResult{ok: true, raw: raw}
+		return probeResult{ok: true, raw: raw, status: status}
 	}
 	value, err := lookupJSON(body, p.JSON)
 	if err != nil {
-		return probeResult{raw: raw, err: err}
+		return probeResult{raw: raw, err: err, status: status}
 	}
 	encoded, _ := json.Marshal(value)
-	return probeResult{ok: truthy(value), raw: fmt.Sprintf("%s, %s=%s", raw, p.JSON, encoded)}
+	return probeResult{ok: truthy(value), raw: fmt.Sprintf("%s, %s=%s", raw, p.JSON, encoded), status: status}
 }
 
 // runAction performs a and describes the outcome for the log.

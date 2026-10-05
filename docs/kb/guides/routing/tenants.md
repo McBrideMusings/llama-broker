@@ -81,6 +81,14 @@ and the tenant doesn't want the GPU until a probe reads true. A failed `busy`
 probe during a drain counts as busy: the drain keeps waiting, so a job whose
 endpoint stops answering is not cut off before `unloadTimeout`.
 
+A `busy` url probe also fails when the status is outside 200-299 and isn't
+`status`, such as a 502 from a proxy in front of ComfyUI. Reading that as idle
+would run `drain` on a job that may still be running. A 2xx status other than
+`status` still reads false. If a busy endpoint answers 404 or 503 to mean idle,
+every drain waits out `unloadTimeout`; set `status` to a 2xx code and read
+`json` instead. A `condition` probe treats every status as a reading, so an
+endpoint that answers 503 while its service is down releases the GPU.
+
 `drain` is an action: a url request (`method` defaults to POST, `body` is sent
 as JSON) or a command.
 

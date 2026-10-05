@@ -309,7 +309,7 @@ func (m *Manager) drain(t *tenant, model string, unloadTimeout time.Duration) {
 				break
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), budget)
-			res := runProbe(ctx, t.cfg.Busy)
+			res := runBusyProbe(ctx, t.cfg.Busy)
 			// A probe given less than an interval and cut off ran into the
 			// drain's deadline, not a fault of the endpoint.
 			cutOff := budget < t.interval && ctx.Err() != nil

@@ -80,6 +80,83 @@ func TestTenants_DrainBusyProbeErrorCountsAsBusy(t *testing.T) {
 	}
 }
 
+func TestTenants_DrainBusyProbeNon2xxStatusCountsAsBusy(t *testing.T) {
+	var mu sync.Mutex
+	var events []string
+	record := func(e string) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	}
+	var polls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/free" {
+			record("free")
+			return
+		}
+		switch polls.Add(1) {
+		case 1:
+			record("502")
+			w.WriteHeader(http.StatusBadGateway)
+		case 2:
+			record("404")
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			record("204")
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	log := logmon.New()
+	m := busyTenant(srv.URL, log)
+
+	m.StopHook("lo-model")(5 * time.Second)
+
+	want := []string{"502", "404", "204", "free"}
+	if strings.Join(events, "|") != strings.Join(want, "|") {
+		t.Fatalf("events %q\nwant   %q", events, want)
+	}
+	busy := *m.Status(nil, nil).Tenants[0].Busy
+	if busy.Result == nil || *busy.Result || busy.Errors != 0 || !strings.Contains(busy.LastError, "HTTP 404, want 200") {
+		t.Fatalf("busy status %+v, want the 204 as a false reading and the 404 as lastError", busy)
+	}
+	history := string(log.GetHistory())
+	for _, line := range []string{
+		"busy probe failed: status is not 2xx (HTTP 502, want 200)",
+		"treating as busy, waiting (2 in a row)",
+		"busy false (HTTP 204, want 200)",
+	} {
+		if !strings.Contains(history, line) {
+			t.Fatalf("log is missing %q:\n%s", line, history)
+		}
+	}
+}
+
+func TestTenants_DrainBusyProbeConfiguredNon2xxStatusIsAReading(t *testing.T) {
+	var polls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/queue" && polls.Add(1) == 1 {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	log := logmon.New()
+	m := busyTenant(srv.URL, log)
+	m.tenants[0].cfg.Busy = &config.TenantProbe{URL: srv.URL + "/queue", Method: "GET", Status: 404}
+
+	m.StopHook("lo-model")(5 * time.Second)
+
+	if busy := *m.Status(nil, nil).Tenants[0].Busy; busy.Errors != 0 || busy.LastError != "" {
+		t.Fatalf("busy status %+v, want no failures: 404 is the configured status", busy)
+	}
+	history := string(log.GetHistory())
+	for _, line := range []string{"busy true (HTTP 404)", "busy false (HTTP 200, want 404)"} {
+		if !strings.Contains(history, line) {
+			t.Fatalf("log is missing %q:\n%s", line, history)
+		}
+	}
+}
+
 func TestTenants_DrainBusyProbeFailingBoundedByUnloadTimeout(t *testing.T) {
 	var freed atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
