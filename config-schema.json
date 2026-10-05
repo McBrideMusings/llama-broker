@@ -950,6 +950,7 @@
                     "models": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Model IDs or aliases this tenant owns. A model belongs to at most one tenant."},
                     "groups": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Routing groups whose members this tenant owns. Needs the group router."},
                     "priority": {"type": "integer", "default": 0, "description": "Higher priority wins the GPU."},
+                    "vram": {"type": "integer", "minimum": 0, "default": 0, "description": "GPU memory in MiB this tenant uses while any of its models runs. Checked against vramReserve; with a reserve set, every model needs a tenant with vram."},
                     "condition": {"$ref": "#/definitions/tenantProbe", "description": "Polled every interval; while true the tenant wants the GPU. Without it the tenant never preempts others."},
                     "busy": {"$ref": "#/definitions/tenantProbe", "description": "Polled during a drain; the stop waits while it is true, up to the model's unloadTimeout."},
                     "drain": {"$ref": "#/definitions/tenantAction", "description": "Run once the busy probe reads false, just before the stop."},
@@ -958,6 +959,12 @@
                 },
                 "additionalProperties": false
             }
+        },
+        "vramReserve": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0,
+            "description": "GPU memory in MiB kept free for programs llama-broker does not manage. A load is held (or refused, per the tenant's onBlocked) while the vram of running tenants, the loading tenant's vram and the reserve exceed the total from hardware detection. 0 disables it. With a reserve set, every model must belong to a tenant that sets vram."
         },
         "routing": {
             "type": "object",

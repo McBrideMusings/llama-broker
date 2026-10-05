@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/mostlygeek/llama-swap/internal/event"
+	"github.com/mostlygeek/llama-swap/internal/hw"
 	"github.com/mostlygeek/llama-swap/internal/tenants"
 )
 
@@ -18,10 +19,19 @@ type tenantStatus interface {
 	TenantStatus() tenants.Status
 }
 
-// handleAPITenants returns each tenant's priority, condition, busy state,
-// loaded models and held request count. Without tenants the list is empty.
+// setTenantVRAM hands the tenant gate the card total from hardware detection
+// and the configured reserve.
+func setTenantVRAM(local any, hardware *hw.HardwareSnapshot, reserveMiB int) {
+	if v, ok := local.(interface{ SetVRAM(int64, int) }); ok {
+		v.SetVRAM(tenants.TotalVRAMMiB(hardware), reserveMiB)
+	}
+}
+
+// handleAPITenants returns the VRAM total, reserve and running tenants' needs,
+// and each tenant's priority, condition, busy state, loaded models and held
+// request count. Without tenants the list is empty.
 func (s *Server) handleAPITenants(w http.ResponseWriter, r *http.Request) {
-	st := tenants.Status{Tenants: []tenants.TenantStatus{}}
+	st := tenants.Status{VRAM: tenants.VRAMStatus{Running: []tenants.TenantNeed{}}, Tenants: []tenants.TenantStatus{}}
 	if ts, ok := s.local.(tenantStatus); ok {
 		st = ts.TenantStatus()
 	}

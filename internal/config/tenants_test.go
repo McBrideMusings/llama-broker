@@ -113,3 +113,44 @@ tenants:
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestTenants_ConfigVRAMReserveNeedsEveryModelDeclared(t *testing.T) {
+	declared := `
+tenants:
+  llm: {groups: [llms], vram: 9000}
+  comfy: {models: [comfy], vram: 12000}
+`
+	cfg, err := LoadConfigFromReader(strings.NewReader(tenantModels + "vramReserve: 4096\n" + declared))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.VRAMReserve != 4096 || cfg.Tenants["comfy"].VRAM != 12000 {
+		t.Errorf("vramReserve=%d comfy vram=%d, want 4096 and 12000", cfg.VRAMReserve, cfg.Tenants["comfy"].VRAM)
+	}
+
+	_, err = LoadConfigFromReader(strings.NewReader(tenantModels + `vramReserve: 4096
+tenants:
+  llm: {groups: [llms], vram: 9000}
+  comfy: {models: [comfy]}
+`))
+	if err == nil || !strings.Contains(err.Error(), "no declared need for [comfy]") {
+		t.Fatalf("comfy without vram: err=%v", err)
+	}
+
+	_, err = LoadConfigFromReader(strings.NewReader(tenantModels + `vramReserve: 4096
+tenants:
+  llm: {models: [chat], vram: 9000}
+`))
+	if err == nil || !strings.Contains(err.Error(), "no declared need for [coder comfy]") {
+		t.Fatalf("untenanted models: err=%v", err)
+	}
+
+	for yaml, want := range map[string]string{
+		"vramReserve: -1\n":                             "vramReserve must be >= 0",
+		"tenants:\n  llm: {models: [chat], vram: -1}\n": "tenants.llm.vram must be >= 0",
+	} {
+		if _, err := LoadConfigFromReader(strings.NewReader(tenantModels + yaml)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err=%v want containing %q", yaml, err, want)
+		}
+	}
+}

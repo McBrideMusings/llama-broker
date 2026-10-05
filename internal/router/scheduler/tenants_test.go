@@ -11,12 +11,14 @@ import (
 // gatedEffects is fakeEffects plus a programmable TenantGate.
 type gatedEffects struct {
 	*fakeEffects
-	blocked map[string]error
-	refuse  map[string]bool
-	records []string // "hold lo", "refuse lo"
+	blocked   map[string]error
+	refuse    map[string]bool
+	records   []string            // "hold lo", "refuse lo"
+	alongside map[string][]string // last alongside set per model
 }
 
-func (g *gatedEffects) TenantBlock(model string) (error, bool) {
+func (g *gatedEffects) TenantBlock(model string, alongside []string) (error, bool) {
+	g.alongside[model] = alongside
 	return g.blocked[model], g.refuse[model]
 }
 
@@ -29,7 +31,21 @@ func (g *gatedEffects) TenantRecord(model string, reason error, refuse bool) {
 }
 
 func newGatedEffects() *gatedEffects {
-	return &gatedEffects{fakeEffects: newFakeEffects(), blocked: map[string]error{}, refuse: map[string]bool{}}
+	return &gatedEffects{fakeEffects: newFakeEffects(), blocked: map[string]error{}, refuse: map[string]bool{},
+		alongside: map[string][]string{}}
+}
+
+func TestTenants_FIFOGateSeesWhatStaysLoaded(t *testing.T) {
+	eff := newGatedEffects()
+	eff.states["a"] = process.StateReady
+	eff.states["b"] = process.StateReady
+	eff.states["c"] = process.StateStopped
+	s := newFIFO(&stubPlanner{evict: map[string][]string{"c": {"a"}}}, eff)
+
+	s.OnRequest(reqCh("c"))
+	if got := eff.alongside["c"]; len(got) != 1 || got[0] != "b" {
+		t.Fatalf("alongside c = %v, want [b]: a is evicted by c's swap", got)
+	}
 }
 
 func TestTenants_FIFOHoldsBlockedModelUntilTenantsChange(t *testing.T) {

@@ -2,8 +2,8 @@
 title: Sharing one GPU between workloads with tenants
 summary: Rank GPU workloads by priority so a higher one holds or refuses lower models, and drains then stops a lower one to make room.
 category: guides
-tags: [tenants, priority, gpu, drain, busy, condition, preempt, hold, refuse, comfyui]
-config_keys: [tenants, tenants.*.models, tenants.*.groups, tenants.*.priority, tenants.*.condition, tenants.*.busy, tenants.*.drain, tenants.*.interval, tenants.*.onBlocked, unloadTimeout]
+tags: [tenants, priority, gpu, drain, busy, condition, preempt, hold, refuse, comfyui, vram, reserve]
+config_keys: [tenants, tenants.*.models, tenants.*.groups, tenants.*.priority, tenants.*.vram, tenants.*.condition, tenants.*.busy, tenants.*.drain, tenants.*.interval, tenants.*.onBlocked, vramReserve, unloadTimeout]
 updated: 2026-10-05
 ---
 
@@ -70,6 +70,35 @@ Then it runs `drain` and the model stops. If the tenant is still busy when
 `unloadTimeout` runs out, the drain logs a warning and the model stops anyway.
 Stops of two models from one tenant share a single drain.
 
+## Keeping VRAM free for other programs
+
+`vramReserve` keeps that many MiB of GPU memory free for programs
+llama-broker does not manage, such as a video transcoder. Each tenant declares
+`vram`, the MiB it uses while any of its models runs. A load is held, or
+refused under `onBlocked: refuse`, while the `vram` of the tenants running
+alongside it, plus its own tenant's `vram`, plus the reserve, exceeds the card
+total. The total is the sum of accelerator memory that hardware detection
+reports (`GET /api/hardware`). Tenants that the load's own swap evicts don't
+count, and a tenant that is already running is never held by the reserve.
+
+```yaml
+vramReserve: 4096            # MiB left for the transcoder
+tenants:
+  comfy: {priority: 10, models: [comfy], vram: 12000}
+  chat:  {priority: 1, groups: [llms], vram: 9000}
+```
+
+On a 24576 MiB card, comfy (12000) and chat (9000) plus the 4096 reserve come
+to 25096 MiB, so whichever loads second waits until the first stops. With a
+reserve set, every model must belong to a tenant that sets `vram`, or the
+config fails to load: a load nobody declared could use up the reserve without
+the broker knowing. The reserve hold writes the raw numbers into the
+decision line:
+
+```text
+tenants: decision time=2026-10-05T14:02:11Z tenant=chat model=qwen action=hold probe="vram total=24576MiB reserve=4096MiB running=[comfy:12000] need=chat:9000" reason="model qwen (tenant chat) is blocked: its vram 9000 MiB plus 12000 MiB of running tenants plus vramReserve 4096 MiB is 25096 MiB, over the 24576 MiB total"
+```
+
 ## What goes wrong
 
 - **The higher tenant loads next to the lower one.** The condition is polled,
@@ -84,6 +113,14 @@ Stops of two models from one tenant share a single drain.
   wants the GPU. Use `onBlocked: refuse` when clients would rather retry.
 - **A render is cut off.** The drain waits at most `unloadTimeout`. Raise the
   model's `unloadTimeout` to cover your longest job.
+- **The reserve holds nothing.** When hardware detection reports no
+  accelerator memory, the reserve is not enforced: startup logs `tenants:
+  vramReserve=... not enforced` and `GET /api/tenants` shows `"totalMiB":
+  null`. On unified-memory machines (Apple silicon, GB10) the total is system
+  memory.
+- **A model waits forever under the reserve.** A tenant whose `vram` plus the
+  reserve exceeds the total can never load; startup logs `tenants: <name> can
+  never load`. Lower one of the two.
 - **Something happened and you want to know why.** Read the decision log
   lines or `GET /api/tenants`, below.
 
@@ -102,10 +139,13 @@ Condition changes log as `tenants: <name> (priority N) condition true (...)`.
 The same decisions go out on `GET /api/events` as `tenantDecision` messages
 whose data is `{time, tenant, model, action, probe, reason}`.
 
-`GET /api/tenants` returns each tenant, highest priority first:
+`GET /api/tenants` returns the VRAM accounting and each tenant, highest
+priority first:
 
 ```json
-{"tenants": [{"name": "comfy", "priority": 10, "onBlocked": "hold",
+{"vram": {"totalMiB": 24576, "reserveMiB": 4096, "enforced": true,
+  "running": [{"tenant": "comfy", "vramMiB": 12000}], "usedMiB": 12000},
+ "tenants": [{"name": "comfy", "priority": 10, "vramMiB": 12000, "onBlocked": "hold",
   "models": ["comfy"], "wantsGPU": false, "condition": null,
   "busy": {"result": false, "raw": "HTTP 200, exec_info.queue_remaining=0", "probedAt": "2026-10-04T20:15:09Z"},
   "draining": false, "stopping": false,

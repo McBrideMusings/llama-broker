@@ -24,6 +24,11 @@ type TenantConfig struct {
 	Groups   []string `yaml:"groups"`
 	Priority int      `yaml:"priority"`
 
+	// VRAM is the GPU memory, in MiB, the tenant uses while any of its models
+	// is running. With a top-level vramReserve, a load is held while the
+	// needs of running tenants plus the reserve would exceed the card total.
+	VRAM int `yaml:"vram"`
+
 	// Condition is polled every Interval seconds. Without one the tenant never
 	// wants the GPU on its own; it is only ever made room for others.
 	Condition *TenantProbe `yaml:"condition"`
@@ -122,6 +127,10 @@ func validateTenants(config *Config) error {
 			return fmt.Errorf("tenants.%s.onBlocked must be hold or refuse, got %q", name, t.OnBlocked)
 		}
 
+		if t.VRAM < 0 {
+			return fmt.Errorf("tenants.%s.vram must be >= 0", name)
+		}
+
 		if t.Interval < 0 {
 			return fmt.Errorf("tenants.%s.interval must be >= 0", name)
 		}
@@ -140,6 +149,28 @@ func validateTenants(config *Config) error {
 		}
 
 		config.Tenants[name] = t
+	}
+	return validateVRAMReserve(config, owner)
+}
+
+// validateVRAMReserve checks that, with a reserve set, every model belongs to a
+// tenant that declares its vram need: an uncounted load could eat the reserve.
+func validateVRAMReserve(config *Config, owner map[string]string) error {
+	if config.VRAMReserve < 0 {
+		return fmt.Errorf("vramReserve must be >= 0")
+	}
+	if config.VRAMReserve == 0 {
+		return nil
+	}
+	var undeclared []string
+	for id := range config.Models {
+		if t, ok := owner[id]; !ok || config.Tenants[t].VRAM == 0 {
+			undeclared = append(undeclared, id)
+		}
+	}
+	if len(undeclared) > 0 {
+		sort.Strings(undeclared)
+		return fmt.Errorf("vramReserve needs every model in a tenant with vram set; no declared need for %v", undeclared)
 	}
 	return nil
 }

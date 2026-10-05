@@ -197,6 +197,9 @@ type Config struct {
 	Profiles  map[string]ProfileConfig  `yaml:"profiles"`
 	Selectors map[string]SelectorConfig `yaml:"selectors"`
 	Tenants   map[string]TenantConfig   `yaml:"tenants"` /* key is tenant name, see tenants.go */
+	// VRAMReserve is MiB of GPU memory kept free for programs llama-broker
+	// does not manage; see tenants.go.
+	VRAMReserve int `yaml:"vramReserve"`
 
 	// GlobalConcurrencyLimit caps the number of inference requests served at
 	// once across all models. 0 (default) means no limit. See issue #1086.

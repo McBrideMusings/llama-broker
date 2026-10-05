@@ -60,6 +60,7 @@ type Manager struct {
 
 	mu     sync.Mutex
 	router Router
+	vram   vram // set by SetVRAM; see reserve.go
 }
 
 // New builds a Manager from validated tenant configs. It returns nil when there
@@ -108,7 +109,11 @@ func (m *Manager) Start(ctx context.Context, r Router) {
 // A model is blocked when a higher-priority tenant wants the GPU, and also when
 // its own tenant wants the GPU but a lower tenant still has a process running:
 // the higher tenant loads only after the lower one has drained and stopped.
-func (m *Manager) Block(model string) (reason error, refuse bool) {
+// With a VRAM reserve it is also blocked while the needs of the tenants running
+// alongside it, its own and the reserve exceed the card total. alongside is the
+// models that stay loaded if model loads: running ones and in-flight swap
+// targets, less those the swap evicts.
+func (m *Manager) Block(model string, alongside []string) (reason error, refuse bool) {
 	if m == nil {
 		return nil, false
 	}
@@ -134,6 +139,9 @@ func (m *Manager) Block(model string) (reason error, refuse bool) {
 				return fmt.Errorf("tenant %s waits for lower tenant %s to stop %v", t.name, l.name, ids), false
 			}
 		}
+	}
+	if err := m.reserveBlockLocked(t, model, alongside); err != nil {
+		return err, t.cfg.OnBlocked == config.TenantOnBlockedRefuse
 	}
 	return nil, false
 }

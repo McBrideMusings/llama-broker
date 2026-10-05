@@ -46,7 +46,7 @@ func TestTenants_DecisionsLoggedAndEmitted(t *testing.T) {
 	m.Start(t.Context(), r)
 
 	eventually(t, "stop decision", func() bool { return decided(ActionStop) })
-	reason, refuse := m.Block("lo-model")
+	reason, refuse := m.Block("lo-model", nil)
 	m.Record("lo-model", reason, refuse)
 	event.Emit(swaputil.ProcessStateChangeEvent{ProcessName: "hi-model", OldState: "stopped", NewState: "starting"})
 	eventually(t, "hold and load decisions", func() bool { return decided(ActionHold) && decided(ActionLoad) })
@@ -81,7 +81,7 @@ func TestTenants_StatusReportsProbesLoadedAndHeld(t *testing.T) {
 	cfgs["lo"] = lo
 	m := New(cfgs, logmon.NewWriter(io.Discard))
 	m.Start(t.Context(), &fakeRouter{running: map[string]process.ProcessState{}})
-	eventually(t, "hi to want the GPU", func() bool { reason, _ := m.Block("lo-model"); return reason != nil })
+	eventually(t, "hi to want the GPU", func() bool { reason, _ := m.Block("lo-model", nil); return reason != nil })
 	m.StopHook("lo-model")(time.Second)
 
 	st := m.Status(map[string]process.ProcessState{"hi-model": process.StateReady}, map[string]int{"lo-model": 2})

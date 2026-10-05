@@ -27,8 +27,8 @@ func (b *baseRouter) start() {
 }
 
 // TenantBlock implements scheduler.TenantGate.
-func (b *baseRouter) TenantBlock(model string) (error, bool) {
-	return b.tenants.Block(model)
+func (b *baseRouter) TenantBlock(model string, alongside []string) (error, bool) {
+	return b.tenants.Block(model, alongside)
 }
 
 // TenantRecord implements scheduler.TenantGate.
@@ -48,6 +48,12 @@ func (b *baseRouter) publishHeld() {
 	}
 	held := h.HeldRequests()
 	b.held.Store(&held)
+}
+
+// SetVRAM sets the card total and the reserve the tenant gate holds loads
+// against, both in MiB.
+func (b *baseRouter) SetVRAM(totalMiB int64, reserveMiB int) {
+	b.tenants.SetVRAM(totalMiB, reserveMiB)
 }
 
 // TenantStatus reports every tenant's state for GET /api/tenants.

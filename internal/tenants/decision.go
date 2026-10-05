@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/mostlygeek/llama-swap/internal/event"
@@ -71,6 +73,11 @@ func (m *Manager) Record(model string, reason error, refuse bool) {
 	if refuse {
 		action = ActionRefuse
 	}
+	var reserve *ReserveError
+	if errors.As(reason, &reserve) {
+		m.record(Decision{Tenant: t.name, Model: model, Action: action, Probe: reserve.Probe(), Reason: reason.Error()})
+		return
+	}
 	// The probe behind a block is the condition of the tenant that wants the
 	// GPU: the blocker's, or t's own while it waits for a lower tenant.
 	by := t
@@ -111,6 +118,16 @@ func (t *tenant) conditionLocked() string {
 // is cancelled.
 func (m *Manager) recordLoads(ctx context.Context) {
 	cancel := event.On(func(e swaputil.ProcessStateChangeEvent) {
+		if e.NewState == string(process.StateStopped) {
+			// A stop frees VRAM: requests held by the reserve get a re-check.
+			m.mu.Lock()
+			router, enforced := m.router, m.vram.enforced()
+			m.mu.Unlock()
+			if enforced && router != nil {
+				router.Wake()
+			}
+			return
+		}
 		if e.NewState != string(process.StateStarting) {
 			return
 		}
@@ -136,6 +153,7 @@ func (m *Manager) recordLoads(ctx context.Context) {
 
 // Status is the GET /api/tenants body.
 type Status struct {
+	VRAM    VRAMStatus     `json:"vram"`
 	Tenants []TenantStatus `json:"tenants"`
 }
 
@@ -143,6 +161,7 @@ type Status struct {
 type TenantStatus struct {
 	Name      string   `json:"name"`
 	Priority  int      `json:"priority"`
+	VRAMMiB   int      `json:"vramMiB"` // declared need; 0 when not declared
 	OnBlocked string   `json:"onBlocked"`
 	Models    []string `json:"models"`
 	// WantsGPU is the last condition reading; always false without a condition.
@@ -175,16 +194,18 @@ type LoadedModel struct {
 // Status reports every tenant. running is the router's processes that are not
 // stopped; held counts held requests by model.
 func (m *Manager) Status(running map[string]process.ProcessState, held map[string]int) Status {
-	st := Status{Tenants: []TenantStatus{}}
+	st := Status{VRAM: VRAMStatus{Running: []TenantNeed{}}, Tenants: []TenantStatus{}}
 	if m == nil {
 		return st
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	st.VRAM = m.vramStatusLocked(slices.Collect(maps.Keys(running)))
 	for _, t := range m.tenants {
 		ts := TenantStatus{
 			Name:      t.name,
 			Priority:  t.cfg.Priority,
+			VRAMMiB:   t.cfg.VRAM,
 			OnBlocked: t.cfg.OnBlocked,
 			Models:    append([]string{}, t.cfg.Members...),
 			WantsGPU:  t.wants,

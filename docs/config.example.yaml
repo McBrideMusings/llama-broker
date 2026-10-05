@@ -650,6 +650,12 @@ tenants:
   "chat":
     priority: 10
 
+    # vram: GPU memory in MiB this tenant uses while any of its models runs
+    # - optional, default: 0
+    # - counted against vramReserve; with a reserve set, every model needs a
+    #   tenant with vram
+    vram: 9000
+
     # models: model IDs or aliases this tenant owns
     # - a model belongs to at most one tenant
     models:
@@ -675,6 +681,16 @@ tenants:
     # - hold: wait in the queue until the higher tenant no longer wants the GPU
     # - refuse: fail at once with HTTP 503 naming the tenant that holds the GPU
     onBlocked: hold
+
+# vramReserve: GPU memory in MiB kept free for programs llama-broker does not manage
+# - optional, default: 0 (disabled)
+# - a load is held (or refused, per the tenant's onBlocked) while the vram of the
+#   tenants running alongside it, its own tenant's vram and the reserve exceed
+#   the accelerator memory total from hardware detection (GET /api/hardware)
+# - with a reserve set, every model must belong to a tenant that sets vram
+# - when hardware detection reports no accelerator memory, the reserve is not
+#   enforced and the log says so
+vramReserve: 0
 
 # routing:
 # Controls how llama-swap decides which models can run at the same time and
