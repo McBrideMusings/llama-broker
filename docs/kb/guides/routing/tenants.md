@@ -170,7 +170,16 @@ priority first:
 `condition` and `busy` are `null` when not configured, and their `result` is
 `null` before the first reading. After a condition probe fails, `condition`
 also carries `errors` (failures since the last reading, left out once one
-succeeds), `lastError` and `lastErrorAt`, and the decision line's probe ends with
-`; failed probes since: N, latest: <error>`. The busy probe only runs during a drain, so
-`busy` is the latest drain's reading. `held` counts requests waiting at the
+succeeds), `lastError` and `lastErrorAt`, and the decision line's probe ends
+with `; failed probes since: N, latest: <error>`. A tenant whose endpoint has
+timed out twice since it last read true:
+
+```json
+"condition": {"result": true, "raw": "HTTP 200, active=true", "probedAt": "2026-10-04T20:15:02Z",
+  "errors": 2, "lastError": "Get \"http://127.0.0.1:9000/session\": context deadline exceeded",
+  "lastErrorAt": "2026-10-04T20:15:12Z"}
+```
+
+The busy probe only runs during a drain, so `busy` is the latest drain's
+reading. `held` counts requests waiting at the
 tenant gate, not requests queued behind a swap.
