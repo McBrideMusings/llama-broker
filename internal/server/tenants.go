@@ -8,6 +8,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/event"
 	"github.com/mostlygeek/llama-swap/internal/hw"
 	"github.com/mostlygeek/llama-swap/internal/router"
+	"github.com/mostlygeek/llama-swap/internal/swaputil"
 	"github.com/mostlygeek/llama-swap/internal/tenants"
 )
 
@@ -38,6 +39,29 @@ func (s *Server) handleAPITenants(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(st)
+}
+
+// preload sends one hooks.on_startup.preload request for modelID and waits
+// until it is served or the tenant gate holds it, so a held preload does not
+// delay the models listed after it. A held request completes in the
+// background once the gate opens.
+func (s *Server) preload(modelID string) {
+	tenants.Preload(s.shutdownCtx, func(ctx context.Context) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
+		if err != nil {
+			return
+		}
+		req = req.WithContext(swaputil.SetContext(req.Context(), swaputil.ReqContextData{Model: modelID, ModelID: modelID, Metadata: make(map[string]string)}))
+
+		dw := &discardResponseWriter{status: http.StatusOK}
+		s.local.ServeHTTP(dw, req)
+
+		success := dw.status < http.StatusBadRequest
+		if !success {
+			s.logs.ProxyLogs.Errorf("failed to preload model %s: status %d", modelID, dw.status)
+		}
+		event.Emit(swaputil.ModelPreloadedEvent{ModelName: modelID, Success: success})
+	})
 }
 
 // onTenantDecision forwards tenant decisions to an /api/events client.

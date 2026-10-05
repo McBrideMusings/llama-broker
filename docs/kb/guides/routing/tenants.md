@@ -31,7 +31,10 @@ even under `onBlocked: refuse`: it is sent once and has nobody to retry
 after a 503, so it waits in the queue and loads when the gate opens. Its
 decision line reads `action=hold` with a reason starting `preload held,
 onBlocked: refuse does not apply to preloads`. Preloads go out one at a
-time, so a held preload also delays every model listed after it.
+time in list order, each waiting for the one before it to load. A held
+preload, under either `onBlocked` value, stops that wait: the models listed
+after it still preload, and the held model loads when the gate opens, which
+can be while a later model is still loading.
 
 ```yaml
 tenants:

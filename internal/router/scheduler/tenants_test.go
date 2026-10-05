@@ -1,8 +1,11 @@
 package scheduler
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mostlygeek/llama-swap/internal/process"
@@ -131,6 +134,54 @@ func TestTenants_FIFOHoldsRefusedPreloadUntilTenantsChange(t *testing.T) {
 	s.OnTenantsChanged()
 	if got := eff.served("lo"); got != 1 {
 		t.Fatalf("served lo %d times after the gate opened, want 1", got)
+	}
+}
+
+func TestTenants_HeldPreloadDoesNotDelayLaterPreloads(t *testing.T) {
+	for _, refuse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("refuse=%v", refuse), func(t *testing.T) {
+			eff := newGatedEffects()
+			eff.states["a"] = process.StateReady
+			eff.states["lo"] = process.StateReady
+			eff.states["hi"] = process.StateReady
+			eff.blocked["lo"] = errors.New("tenant hi wants the GPU")
+			eff.refuse["lo"] = refuse
+			s := newFIFO(&stubPlanner{}, eff)
+
+			// mu stands in for the run loop that serializes scheduler calls.
+			var mu sync.Mutex
+			stop, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			// Send [a, lo, hi] the way startPreload does: each send returns
+			// once served, or waits forever while queued.
+			for _, model := range []string{"a", "lo", "hi"} {
+				tenants.Preload(stop, func(ctx context.Context) {
+					mu.Lock()
+					r := reqCh(model)
+					r.Ctx = ctx
+					s.OnRequest(r)
+					served := eff.served(model) > 0
+					mu.Unlock()
+					if !served {
+						<-stop.Done()
+					}
+				})
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			var served []string
+			for _, g := range eff.grants {
+				served = append(served, g.model)
+			}
+			if got, want := strings.Join(served, ","), "a,hi"; got != want {
+				t.Fatalf("served %q want %q: hi must not wait on held lo", got, want)
+			}
+			if len(s.queued) != 1 || s.queued[0].Model != "lo" {
+				t.Fatalf("queued=%v want [lo]", s.queued)
+			}
+		})
 	}
 }
 
