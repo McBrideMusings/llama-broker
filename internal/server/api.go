@@ -12,6 +12,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/event"
 	"github.com/mostlygeek/llama-swap/internal/process"
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
+	"github.com/mostlygeek/llama-swap/internal/tenants"
 )
 
 // modelRecord is one entry in the OpenAI-compatible /v1/models listing.
@@ -400,7 +401,7 @@ func (s *Server) startPreload() {
 			}
 			s.logs.ProxyLogs.Infof("preloading model: %s", modelID)
 
-			req, err := http.NewRequestWithContext(s.shutdownCtx, http.MethodGet, "/", nil)
+			req, err := http.NewRequestWithContext(tenants.WithPreload(s.shutdownCtx), http.MethodGet, "/", nil)
 			if err != nil {
 				continue
 			}

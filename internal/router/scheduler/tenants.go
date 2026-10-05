@@ -1,6 +1,10 @@
 package scheduler
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/mostlygeek/llama-swap/internal/tenants"
+)
 
 // TenantGate is the tenant admission check (internal/tenants). Effects
 // implementations that also implement it have every request checked; ones that
@@ -15,17 +19,19 @@ type TenantGate interface {
 	TenantRecord(model string, reason error, refuse bool)
 }
 
-// tenantBlock asks the gate about model; without a gate nothing is blocked.
-// The gate is told what stays loaded alongside model: running processes and
-// in-flight swap targets, less what model's own swap would evict.
-func (s *FIFO) tenantBlock(model string) (error, bool) {
+// tenantBlock asks the gate about req's model; without a gate nothing is
+// blocked. The gate is told what stays loaded alongside the model: running
+// processes and in-flight swap targets, less what its own swap would evict. A
+// preload is held where the gate says refuse.
+func (s *FIFO) tenantBlock(req HandlerReq) (error, bool) {
 	if s.gate == nil {
 		return nil, false
 	}
-	running := s.runningSet(model)
-	evict := s.planner.EvictionFor(model, running)
+	running := s.runningSet(req.Model)
+	evict := s.planner.EvictionFor(req.Model, running)
 	alongside := slices.DeleteFunc(running, func(id string) bool { return slices.Contains(evict, id) })
-	return s.gate.TenantBlock(model, alongside)
+	reason, refuse := s.gate.TenantBlock(req.Model, alongside)
+	return tenants.HoldPreload(req.Ctx, reason, refuse)
 }
 
 // OnTenantsChanged re-runs the queue after a tenant's condition changed or a
@@ -46,7 +52,7 @@ func (s *FIFO) tenantRecord(model string, reason error, refuse bool) {
 func (s *FIFO) HeldRequests() map[string]int {
 	held := make(map[string]int)
 	for _, req := range s.queued {
-		if blocked, _ := s.tenantBlock(req.Model); blocked != nil {
+		if blocked, _ := s.tenantBlock(req); blocked != nil {
 			held[req.Model]++
 		}
 	}

@@ -26,6 +26,13 @@ When the condition turns false, held requests continue in queue order.
 The full ComfyUI recipe, with why each setting is there, is
 `guides/upstreams/comfyui-tenant`.
 
+A blocked preload from `hooks.on_startup.preload` is held, never refused,
+even under `onBlocked: refuse`: it is sent once and has nobody to retry
+after a 503, so it waits in the queue and loads when the gate opens. Its
+decision line reads `action=hold` with a reason starting `preload held,
+onBlocked: refuse does not apply to preloads`. Preloads go out one at a
+time, so a held preload also delays every model listed after it.
+
 ```yaml
 tenants:
   game-streaming:            # owns no models; it only claims the GPU
@@ -66,10 +73,7 @@ command can't run, when the body isn't JSON, or when it takes longer than
 keeps its last reading, so a slow or briefly unreachable endpoint neither
 releases held requests nor claims the GPU. Until a tenant's first condition
 probe finishes, nobody knows whether it wants the GPU, so loads of every
-lower tenant's models are held or refused, preloads from
-`hooks.on_startup.preload` included. A preload is sent once: held, it loads
-when the gate opens; refused, it logs `failed to preload model <id>: status
-503` and the model stays unloaded until a request asks for it. A first probe that fails releases them,
+lower tenant's models are held or refused. A first probe that fails releases them,
 and the tenant doesn't want the GPU until a probe reads true. A failed `busy`
 probe during a drain counts as busy: the drain keeps waiting, so a job whose
 endpoint stops answering is not cut off before `unloadTimeout`.

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mostlygeek/llama-swap/internal/process"
+	"github.com/mostlygeek/llama-swap/internal/tenants"
 )
 
 // gatedEffects is fakeEffects plus a programmable TenantGate.
@@ -98,6 +99,38 @@ func TestTenants_FIFORefusesWithReason(t *testing.T) {
 	}
 	if len(s.reserved) != 0 {
 		t.Fatalf("refused request kept a concurrency reservation: %v", s.reserved)
+	}
+}
+
+func TestTenants_FIFOHoldsRefusedPreloadUntilTenantsChange(t *testing.T) {
+	eff := newGatedEffects()
+	eff.states["lo"] = process.StateReady
+	reason := errors.New("tenant hi wants the GPU")
+	eff.blocked["lo"] = reason
+	eff.refuse["lo"] = true
+	s := newFIFO(&stubPlanner{}, eff)
+
+	r := reqCh("lo")
+	r.Ctx = tenants.WithPreload(r.Ctx)
+	s.OnRequest(r)
+	assertAdmitted(t, r)
+	if len(s.queued) != 1 {
+		t.Fatalf("queued=%d want 1: a refused preload is held", len(s.queued))
+	}
+
+	// A wake while still refusing keeps the preload held, not failed.
+	s.OnTenantsChanged()
+	if eff.errored("lo") != 0 || len(s.queued) != 1 {
+		t.Fatalf("after wake while blocked: errored=%d queued=%d, want 0 and 1", eff.errored("lo"), len(s.queued))
+	}
+	if got, want := strings.Join(eff.records, ","), "hold lo"; got != want {
+		t.Fatalf("records %q want %q", got, want)
+	}
+
+	delete(eff.blocked, "lo")
+	s.OnTenantsChanged()
+	if got := eff.served("lo"); got != 1 {
+		t.Fatalf("served lo %d times after the gate opened, want 1", got)
 	}
 }
 

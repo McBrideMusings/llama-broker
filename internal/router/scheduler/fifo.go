@@ -105,7 +105,7 @@ func (s *FIFO) OnRequest(req HandlerReq) {
 
 	// Tenants: a model outranked by a tenant that wants the GPU is refused
 	// here or held in the queue below until OnTenantsChanged.
-	blocked, refuse := s.tenantBlock(req.Model)
+	blocked, refuse := s.tenantBlock(req)
 	if blocked != nil && refuse {
 		s.tenantRecord(req.Model, blocked, true)
 		s.rejectAdmission(req, blocked)
@@ -431,7 +431,7 @@ func (s *FIFO) drainQueue() {
 			s.grantError(req, ErrModelNotFound)
 			continue
 		}
-		if blocked, refuse := s.tenantBlock(req.Model); blocked != nil {
+		if blocked, refuse := s.tenantBlock(req); blocked != nil {
 			if refuse {
 				s.tenantRecord(req.Model, blocked, true)
 				s.grantError(req, blocked)
