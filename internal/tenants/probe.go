@@ -76,7 +76,7 @@ func runAction(ctx context.Context, a *config.TenantAction) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	raw := fmt.Sprintf("HTTP %d %s", status, strings.TrimSpace(string(body)))
+	raw := strings.TrimSpace(fmt.Sprintf("HTTP %d %s", status, strings.TrimSpace(string(body))))
 	if status < 200 || status > 299 {
 		return raw, fmt.Errorf("HTTP %d", status)
 	}

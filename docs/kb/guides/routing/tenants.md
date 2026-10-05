@@ -4,7 +4,7 @@ summary: Rank GPU workloads by priority so a higher one holds or refuses lower m
 category: guides
 tags: [tenants, priority, gpu, drain, busy, condition, preempt, hold, refuse, comfyui]
 config_keys: [tenants, tenants.*.models, tenants.*.groups, tenants.*.priority, tenants.*.condition, tenants.*.busy, tenants.*.drain, tenants.*.interval, tenants.*.onBlocked, unloadTimeout]
-updated: 2026-10-04
+updated: 2026-10-05
 ---
 
 # Sharing one GPU between workloads with tenants
@@ -23,6 +23,8 @@ models (directly or through routing groups) and has a `priority`. While its
    models have stopped, so it never loads next to them.
 
 When the condition turns false, held requests continue in queue order.
+The full ComfyUI recipe, with why each setting is there, is
+`guides/upstreams/comfyui-tenant`.
 
 ```yaml
 tenants:
@@ -36,8 +38,8 @@ tenants:
     priority: 10
     models: [comfy]
     busy:                    # stop waits while this reads true
-      url: http://127.0.0.1:8188/queue
-      json: queue_running
+      url: http://127.0.0.1:8188/prompt
+      json: exec_info.queue_remaining
     drain:                   # runs once busy reads false, before the stop
       url: http://127.0.0.1:8188/free
       body: '{"unload_models":true,"free_memory":true}'
@@ -93,7 +95,7 @@ info line with the time, tenant, model, action, the probe reading it rests on
 
 ```text
 tenants: decision time=2026-10-04T20:15:02.1Z tenant=chat model=qwen action=hold probe="condition of game-streaming: true (HTTP 200, active=true)" reason="model qwen (tenant chat, priority 1) is blocked: tenant game-streaming (priority 100) wants the GPU"
-tenants: decision time=2026-10-04T20:15:03.4Z tenant=comfy model=comfy action=drain probe="busy true (HTTP 200, queue_running=[[\"job\"]])" reason="busy, waiting"
+tenants: decision time=2026-10-04T20:15:03.4Z tenant=comfy model=comfy action=drain probe="busy true (HTTP 200, exec_info.queue_remaining=1)" reason="busy, waiting"
 ```
 
 Condition changes log as `tenants: <name> (priority N) condition true (...)`.
@@ -105,7 +107,7 @@ whose data is `{time, tenant, model, action, probe, reason}`.
 ```json
 {"tenants": [{"name": "comfy", "priority": 10, "onBlocked": "hold",
   "models": ["comfy"], "wantsGPU": false, "condition": null,
-  "busy": {"result": false, "raw": "HTTP 200, queue_running=[]", "probedAt": "2026-10-04T20:15:09Z"},
+  "busy": {"result": false, "raw": "HTTP 200, exec_info.queue_remaining=0", "probedAt": "2026-10-04T20:15:09Z"},
   "draining": false, "stopping": false,
   "loaded": [{"model": "comfy", "state": "ready"}], "held": 0}]}
 ```
