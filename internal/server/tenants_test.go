@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
@@ -74,7 +73,7 @@ func TestTenants_PreloadMarksRequestContext(t *testing.T) {
 	if refuse {
 		t.Fatal("preload request context is not marked: HoldPreload kept refuse=true")
 	}
-	if !strings.HasPrefix(reason.Error(), "preload held, onBlocked: refuse does not apply to preloads") || !errors.Is(reason, blocked) {
-		t.Fatalf("HoldPreload reason = %v, want the wrapped preload-held reason", reason)
+	if !errors.Is(reason, blocked) {
+		t.Fatalf("HoldPreload reason = %v, want it to wrap %v", reason, blocked)
 	}
 }

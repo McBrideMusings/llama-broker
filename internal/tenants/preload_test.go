@@ -36,6 +36,7 @@ func TestTenants_HoldPreload(t *testing.T) {
 		{name: "nil ctx", ctx: nil, reason: blocked, refuse: true, wantRefuse: true},
 		{name: "unmarked ctx", ctx: context.Background(), reason: blocked, refuse: true, wantRefuse: true},
 		{name: "nil reason", ctx: WithPreload(context.Background()), reason: nil, refuse: false},
+		{name: "nil reason keeps refuse", ctx: WithPreload(context.Background()), reason: nil, refuse: true, wantRefuse: true},
 		{name: "marked, hold passes through", ctx: WithPreload(context.Background()), reason: blocked, refuse: false, wantHeld: true},
 		{name: "marked, refuse becomes hold", ctx: WithPreload(context.Background()), reason: blocked, refuse: true, wantWrap: true, wantHeld: true},
 	}
