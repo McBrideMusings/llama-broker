@@ -48,9 +48,12 @@ type tenant struct {
 	condAt     time.Time
 	condErr    probeResult // latest failed condition probe
 	condErrAt  time.Time
-	condErrors int // condition probes failed in a row; 0 after a reading
-	busy       probeResult
+	condErrors int         // condition probes failed in a row; 0 after a reading
+	busy       probeResult // last busy reading that did not error; failures go to busyErr
 	busyAt     time.Time
+	busyErr    probeResult // latest failed busy probe
+	busyErrAt  time.Time
+	busyErrors int // busy probes failed in a row; 0 after a reading
 
 	drainMu   sync.Mutex
 	drainDone chan struct{} // non-nil while a drain runs
@@ -268,8 +271,10 @@ func (m *Manager) StopHook(model string) func(unloadTimeout time.Duration) {
 }
 
 // drain waits until t's busy probe reads false, for at most unloadTimeout,
-// then runs its drain action. Concurrent stops of the same tenant share one
-// drain.
+// then runs its drain action. A busy probe that errors or times out counts as
+// busy, so an unreachable job endpoint never cuts off a running job before
+// unloadTimeout. Each probe gets at most one interval. Concurrent stops of the
+// same tenant share one drain.
 func (m *Manager) drain(t *tenant, model string, unloadTimeout time.Duration) {
 	t.drainMu.Lock()
 	if done := t.drainDone; done != nil {
@@ -302,25 +307,51 @@ func (m *Manager) drain(t *tenant, model string, unloadTimeout time.Duration) {
 	step("", fmt.Sprintf("draining before stopping %s: %s (unloadTimeout %s)", model, why, unloadTimeout))
 	if t.cfg.Busy != nil {
 		deadline := time.Now().Add(unloadTimeout)
+		probe := "busy not read"
+		stopping := fmt.Sprintf("busy probe did not answer within %s, stopping anyway", unloadTimeout)
 		for {
-			ctx, cancel := context.WithDeadline(context.Background(), deadline)
+			budget := min(t.interval, time.Until(deadline))
+			if budget <= 0 {
+				warn(probe, stopping)
+				break
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), budget)
 			res := runProbe(ctx, t.cfg.Busy)
+			// A probe given less than an interval and cut off ran into the
+			// drain's deadline, not a fault of the endpoint.
+			cutOff := budget < t.interval && ctx.Err() != nil
 			cancel()
-			m.mu.Lock()
-			t.busy, t.busyAt = res, time.Now().UTC()
-			m.mu.Unlock()
-			probe := "busy " + res.String()
-			if !res.ok {
-				step(probe, "idle")
+			if cutOff {
+				warn(probe, stopping)
 				break
 			}
-			left := time.Until(deadline)
-			if left <= 0 {
-				warn(probe, fmt.Sprintf("still busy after %s, stopping anyway", unloadTimeout))
+			failed := res.err != nil
+			var waiting string
+			if failed {
+				n := m.busyFailed(t, res)
+				probe = "busy probe failed: " + res.failure()
+				stopping = fmt.Sprintf("busy probe still failing after %s (%d in a row), stopping anyway", unloadTimeout, n)
+				waiting = fmt.Sprintf("treating as busy, waiting (%d in a row)", n)
+			} else {
+				m.busyRead(t, res)
+				probe = "busy " + res.String()
+				if !res.ok {
+					step(probe, "idle")
+					break
+				}
+				stopping = fmt.Sprintf("still busy after %s, stopping anyway", unloadTimeout)
+				waiting = "busy, waiting"
+			}
+			if time.Until(deadline) <= 0 {
+				warn(probe, stopping)
 				break
 			}
-			step(probe, "busy, waiting")
-			time.Sleep(min(t.interval, left))
+			if failed {
+				warn(probe, waiting)
+			} else {
+				step(probe, waiting)
+			}
+			time.Sleep(min(t.interval, time.Until(deadline)))
 		}
 	}
 	if t.cfg.Drain != nil {

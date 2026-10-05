@@ -952,7 +952,7 @@
                     "priority": {"type": "integer", "default": 0, "description": "Higher priority wins the GPU."},
                     "vram": {"type": "integer", "minimum": 0, "default": 0, "description": "GPU memory in MiB this tenant uses while any of its models runs. Checked against vramReserve; with a reserve set, every model needs a tenant with vram."},
                     "condition": {"$ref": "#/definitions/tenantProbe", "description": "Polled every interval; while true the tenant wants the GPU. A probe that errors or times out (after interval seconds) keeps the last reading. Without it the tenant never preempts others."},
-                    "busy": {"$ref": "#/definitions/tenantProbe", "description": "Polled during a drain; the stop waits while it is true, up to the model's unloadTimeout."},
+                    "busy": {"$ref": "#/definitions/tenantProbe", "description": "Polled during a drain; the stop waits while it is true or the probe fails, up to the model's unloadTimeout."},
                     "drain": {"$ref": "#/definitions/tenantAction", "description": "Run once the busy probe reads false, just before the stop."},
                     "interval": {"type": "integer", "minimum": 0, "default": 5, "description": "Seconds between condition polls and between busy polls during a drain."},
                     "onBlocked": {"type": "string", "enum": ["hold", "refuse"], "default": "hold", "description": "What a request for this tenant's models gets while a higher tenant wants the GPU: hold (wait in the queue) or refuse (HTTP 503)."}

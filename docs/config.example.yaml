@@ -621,8 +621,8 @@ hooks:
 # - while a tenant's condition is true it wants the GPU: a request for a model of
 #   a lower-priority tenant is held (or refused with HTTP 503), and running models
 #   of lower tenants are drained and stopped before the higher tenant loads
-# - a drain polls the busy probe until it reads false (at most the model's
-#   unloadTimeout), runs the drain action, then stops the model
+# - a drain polls the busy probe until it reads false, a failed probe counting as
+#   busy (at most the model's unloadTimeout), runs the drain action, then stops the model
 # - models no tenant owns are never held, refused or drained
 # - see the knowledge base guide guides/routing/tenants
 tenants:
@@ -668,6 +668,8 @@ tenants:
 
     # busy: polled during a drain; the stop waits while it is true
     # - optional, same forms as condition
+    # - a probe that fails (connection refused, a timeout of interval seconds)
+    #   counts as busy, so the drain keeps waiting until unloadTimeout
     busy:
       cmd: test -f /tmp/llama-busy
 

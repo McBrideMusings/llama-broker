@@ -71,7 +71,8 @@ lower tenant's models are held or refused, preloads from
 when the gate opens; refused, it logs `failed to preload model <id>: status
 503` and the model stays unloaded until a request asks for it. A first probe that fails releases them,
 and the tenant doesn't want the GPU until a probe reads true. A failed `busy`
-probe during a drain reads idle.
+probe during a drain counts as busy: the drain keeps waiting, so a job whose
+endpoint stops answering is not cut off before `unloadTimeout`.
 
 `drain` is an action: a url request (`method` defaults to POST, `body` is sent
 as JSON) or a command.
@@ -84,7 +85,11 @@ unload from the API, and shutdown. The drain polls `busy` every `interval`
 seconds until it reads false, waiting at most the model's `unloadTimeout`.
 Then it runs `drain` and the model stops. If the tenant is still busy when
 `unloadTimeout` runs out, the drain logs a warning and the model stops anyway.
-Stops of two models from one tenant share a single drain.
+Each failed busy probe logs its own warning drain step,
+`probe="busy probe failed: <error>" reason="treating as busy, waiting (N in a row)"`,
+and when `unloadTimeout` runs out while the probe is still failing the drain
+logs `busy probe still failing after <unloadTimeout> (N in a row), stopping
+anyway`. Stops of two models from one tenant share a single drain.
 
 ## Keeping VRAM free for other programs
 
@@ -143,6 +148,12 @@ tenants: decision time=2026-10-05T14:02:11Z tenant=chat model=qwen action=hold p
   wants the GPU. Use `onBlocked: refuse` when clients would rather retry.
 - **A render is cut off.** The drain waits at most `unloadTimeout`. Raise the
   model's `unloadTimeout` to cover your longest job.
+- **Every stop takes the full `unloadTimeout`.** The busy endpoint is
+  unreachable, answers something other than JSON, or takes longer than
+  `interval`, so every probe fails and counts as busy. The drain logs `busy
+  probe failed: <error>` warnings and `GET /api/tenants` shows the count
+  under `busy.errors`. Fix the URL or port, or raise `interval` past the
+  endpoint's response time.
 - **The reserve holds nothing.** When hardware detection reports no
   accelerator memory, the reserve is not enforced: startup logs `tenants:
   vramReserve=... not enforced` and `GET /api/tenants` shows `"totalMiB":
@@ -183,11 +194,11 @@ priority first:
 ```
 
 `condition` and `busy` are `null` when not configured, and their `result` is
-`null` before the first reading. After a condition probe fails, `condition`
-also carries `errors` (failures since the last reading, left out once one
-succeeds), `lastError` and `lastErrorAt`, and the decision line's probe ends
-with `; failed probes since: N, latest: <error>`. A tenant whose endpoint has
-timed out twice since it last read true:
+`null` before the first reading. A failed probe leaves `result` as it was and
+adds `errors` (failures since the last reading, left out once one succeeds),
+`lastError` and `lastErrorAt`. For `condition`, the decision line's probe also
+ends with `; failed probes since: N, latest: <error>`. A tenant whose
+condition endpoint has timed out twice since it last read true:
 
 ```json
 "condition": {"result": true, "raw": "HTTP 200, active=true", "probedAt": "2026-10-04T20:15:02Z",

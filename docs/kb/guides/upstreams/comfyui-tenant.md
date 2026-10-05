@@ -64,7 +64,10 @@ tenants:
   models and releases cached VRAM, so the memory is back before the container
   exits.
 - **`unloadTimeout`** bounds the wait. When a render outlasts it, the drain
-  logs `still busy after ..., stopping anyway` and the container stops.
+  logs `still busy after ..., stopping anyway` and the container stops. A
+  busy probe that fails (ComfyUI too slow to answer within `interval`, or not
+  reachable) counts as busy, so a render whose `/prompt` stalls still gets
+  until `unloadTimeout` before `/free` runs.
 - **`proxy` and `-p 8188:8188`** pin the port. Probe and action URLs are
   fixed strings; they cannot follow a `${PORT}` that changes on every start.
 
@@ -89,11 +92,15 @@ probe's raw reading, and `held: 1` for the waiting prompt.
 
 ## What goes wrong
 
-- **The drain never waits.** The probe URL does not reach ComfyUI, so it reads
-  false at once. After a drain has run, check the `busy` reading in
-  `GET /api/tenants` (it is `null` until then): an `error` or an HTTP status
-  other than 200 means the URL or port is wrong. A tenant with neither `busy`
-  nor `drain` never waits at all; its stops go straight through.
+- **The drain never waits.** The probe path is wrong, so ComfyUI answers a
+  status other than 200 and the probe reads false at once. After a drain has
+  run, check the `busy` reading's `raw` in `GET /api/tenants` (it is `null`
+  until then). A tenant with neither `busy` nor `drain` never waits at all;
+  its stops go straight through.
+- **Every stop waits the full `unloadTimeout`.** The probe host or port is
+  wrong, so every probe fails and counts as busy. The drain logs
+  `busy probe failed: ... connection refused` warnings, and `busy.errors` and
+  `busy.lastError` in `GET /api/tenants` show the failures.
 - **A render is cut off.** It ran longer than `unloadTimeout`. Raise it on
   `comfyui_auto`.
 - **Jobs queued straight to ComfyUI are not held.** Only requests that pass

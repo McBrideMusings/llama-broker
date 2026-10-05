@@ -196,9 +196,8 @@ type TenantStatus struct {
 type ProbeStatus struct {
 	Result   *bool      `json:"result"`
 	Raw      string     `json:"raw,omitempty"`
-	Error    string     `json:"error,omitempty"`
 	ProbedAt *time.Time `json:"probedAt"`
-	// Condition only: a failed probe leaves Result as it was. Errors counts
+	// A failed probe leaves Result as it was. Errors counts
 	// failures since the last reading; LastError and LastErrorAt describe the
 	// latest failure and stay after a reading succeeds.
 	Errors      int        `json:"errors,omitempty"`
@@ -233,16 +232,10 @@ func (m *Manager) Status(running map[string]process.ProcessState, held map[strin
 			Loaded:    []LoadedModel{},
 		}
 		if t.cfg.Condition != nil {
-			ts.Condition = probeStatus(t.cond, t.condAt)
-			if !t.condErrAt.IsZero() {
-				at := t.condErrAt
-				ts.Condition.Errors = t.condErrors
-				ts.Condition.LastError = t.condErr.failure()
-				ts.Condition.LastErrorAt = &at
-			}
+			ts.Condition = probeStatus(t.cond, t.condAt, t.condErr, t.condErrAt, t.condErrors)
 		}
 		if t.cfg.Busy != nil {
-			ts.Busy = probeStatus(t.busy, t.busyAt)
+			ts.Busy = probeStatus(t.busy, t.busyAt, t.busyErr, t.busyErrAt, t.busyErrors)
 		}
 		t.drainMu.Lock()
 		ts.Draining = t.drainDone != nil
@@ -258,17 +251,20 @@ func (m *Manager) Status(running map[string]process.ProcessState, held map[strin
 	return st
 }
 
-func probeStatus(r probeResult, at time.Time) *ProbeStatus {
+// probeStatus reports the last reading r taken at at, and the latest failure
+// failed at failedAt with the count of failures since that reading.
+func probeStatus(r probeResult, at time.Time, failed probeResult, failedAt time.Time, nFailed int) *ProbeStatus {
 	ps := &ProbeStatus{}
-	if at.IsZero() {
-		return ps
+	if !at.IsZero() {
+		ok := r.ok
+		ps.Result = &ok
+		ps.Raw = r.raw
+		ps.ProbedAt = &at
 	}
-	ok := r.ok
-	ps.Result = &ok
-	ps.Raw = r.raw
-	if r.err != nil {
-		ps.Error = r.err.Error()
+	if !failedAt.IsZero() {
+		ps.Errors = nFailed
+		ps.LastError = failed.failure()
+		ps.LastErrorAt = &failedAt
 	}
-	ps.ProbedAt = &at
 	return ps
 }
