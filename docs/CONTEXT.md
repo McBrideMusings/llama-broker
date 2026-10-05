@@ -14,7 +14,7 @@ _Avoid_: client, job
 A polled HTTP probe or command; while it is true, its tenant wants the GPU.
 
 **Drain**:
-Stopping a lower tenant safely: wait until its busy probe reads false (bounded by `unloadTimeout`), run its drain action, then stop it.
+Stopping a lower tenant safely: wait until its busy probe reads false (a failed probe counts as busy), bounded by `unloadTimeout`, run its drain action, then stop it.
 
 **VRAM reserve**:
 VRAM the broker keeps free for GPU users it doesn't manage, such as video transcoders.
