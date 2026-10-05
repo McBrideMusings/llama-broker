@@ -100,6 +100,13 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+// wantsGPU reports the named tenant's last condition reading.
+func wantsGPU(m *Manager, name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.byName(name).wants
+}
+
 func TestTenants_LowerTenantHeldOrRefusedWhileHigherWantsGPU(t *testing.T) {
 	for _, onBlocked := range []string{config.TenantOnBlockedHold, config.TenantOnBlockedRefuse} {
 		t.Run(onBlocked, func(t *testing.T) {
@@ -109,9 +116,7 @@ func TestTenants_LowerTenantHeldOrRefusedWhileHigherWantsGPU(t *testing.T) {
 			r := &fakeRouter{running: map[string]process.ProcessState{}}
 			m.Start(t.Context(), r)
 
-			if reason, _ := m.Block("lo-model", nil); reason != nil {
-				t.Fatalf("lo blocked while hi does not want the GPU: %v", reason)
-			}
+			eventually(t, "hi's first reading to release lo", func() bool { reason, _ := m.Block("lo-model", nil); return reason == nil })
 
 			on.Store(true)
 			eventually(t, "hi to want the GPU", func() bool { reason, _ := m.Block("lo-model", nil); return reason != nil })

@@ -79,11 +79,16 @@ func (m *Manager) Record(model string, reason error, refuse bool) {
 		return
 	}
 	// The probe behind a block is the condition of the tenant that wants the
-	// GPU: the blocker's, or t's own while it waits for a lower tenant.
+	// GPU or has not been probed yet: the blocker's, or t's own while it waits
+	// for a lower tenant.
 	by := t
 	var blocked *BlockedError
-	if errors.As(reason, &blocked) {
+	var pending *PendingError
+	switch {
+	case errors.As(reason, &blocked):
 		by = m.byName(blocked.By)
+	case errors.As(reason, &pending):
+		by = m.byName(pending.By)
 	}
 	m.mu.Lock()
 	probe := by.conditionLocked()
@@ -144,9 +149,12 @@ func (m *Manager) recordLoads(ctx context.Context) {
 		m.mu.Lock()
 		probe := t.conditionLocked()
 		reason := "no higher-priority tenant wants the GPU"
+		// Either branch means the gate admitted the load before h's condition
+		// turned true.
 		if h := m.blockerLocked(t); h != nil {
-			// Loads bypassing the scheduler (preload) are not gated.
 			reason = fmt.Sprintf("loading although tenant %s (priority %d) wants the GPU", h.name, h.cfg.Priority)
+		} else if h := m.pendingLocked(t); h != nil {
+			reason = fmt.Sprintf("loading although the condition of tenant %s (priority %d) has not been probed yet", h.name, h.cfg.Priority)
 		}
 		m.mu.Unlock()
 		m.record(Decision{Tenant: t.name, Model: e.ProcessName, Action: ActionLoad, Probe: probe, Reason: reason})

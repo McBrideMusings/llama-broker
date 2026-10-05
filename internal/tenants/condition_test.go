@@ -59,7 +59,7 @@ func TestTenants_ConditionErrorKeepsClaim(t *testing.T) {
 	log := logmon.New()
 	m := New(twoTenants(srv.URL, config.TenantOnBlockedHold), log)
 	startFast(t, m)
-	eventually(t, "hi to want the GPU", func() bool { reason, _ := m.Block("lo-model", nil); return reason != nil })
+	eventually(t, "hi to want the GPU", func() bool { return wantsGPU(m, "hi") })
 
 	for _, failure := range []string{"broken", "slow"} {
 		mode.Store(failure)

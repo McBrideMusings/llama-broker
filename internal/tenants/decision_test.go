@@ -81,7 +81,7 @@ func TestTenants_StatusReportsProbesLoadedAndHeld(t *testing.T) {
 	cfgs["lo"] = lo
 	m := New(cfgs, logmon.NewWriter(io.Discard))
 	m.Start(t.Context(), &fakeRouter{running: map[string]process.ProcessState{}})
-	eventually(t, "hi to want the GPU", func() bool { reason, _ := m.Block("lo-model", nil); return reason != nil })
+	eventually(t, "hi to want the GPU", func() bool { return wantsGPU(m, "hi") })
 	m.StopHook("lo-model")(time.Second)
 
 	st := m.Status(map[string]process.ProcessState{"hi-model": process.StateReady}, map[string]int{"lo-model": 2})

@@ -111,7 +111,8 @@ func (m *Manager) Start(ctx context.Context, r Router) {
 // Block reports why model may not load now, or nil when it may. refuse says
 // the caller should fail the request with the reason rather than wait.
 //
-// A model is blocked when a higher-priority tenant wants the GPU, and also when
+// A model is blocked when a higher-priority tenant wants the GPU or has a
+// condition whose first probe has not finished, and also when
 // its own tenant wants the GPU but a lower tenant still has a process running:
 // the higher tenant loads only after the lower one has drained and stopped.
 // With a VRAM reserve it is also blocked while the needs of the tenants running
@@ -131,6 +132,11 @@ func (m *Manager) Block(model string, alongside []string) (reason error, refuse 
 
 	if h := m.blockerLocked(t); h != nil {
 		err := &BlockedError{Model: model, Tenant: t.name, Priority: t.cfg.Priority,
+			By: h.name, ByPriority: h.cfg.Priority, RetryAfter: h.cfg.Interval}
+		return err, t.cfg.OnBlocked == config.TenantOnBlockedRefuse
+	}
+	if h := m.pendingLocked(t); h != nil {
+		err := &PendingError{Model: model, Tenant: t.name, Priority: t.cfg.Priority,
 			By: h.name, ByPriority: h.cfg.Priority, RetryAfter: h.cfg.Interval}
 		return err, t.cfg.OnBlocked == config.TenantOnBlockedRefuse
 	}

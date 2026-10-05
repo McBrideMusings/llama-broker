@@ -2,8 +2,8 @@
 title: Sharing one GPU between workloads with tenants
 summary: Rank GPU workloads by priority so a higher one holds or refuses lower models, and drains then stops a lower one to make room.
 category: guides
-tags: [tenants, priority, gpu, drain, busy, condition, preempt, hold, refuse, comfyui, vram, reserve]
-config_keys: [tenants, tenants.*.models, tenants.*.groups, tenants.*.priority, tenants.*.vram, tenants.*.condition, tenants.*.busy, tenants.*.drain, tenants.*.interval, tenants.*.onBlocked, vramReserve, unloadTimeout]
+tags: [tenants, priority, gpu, drain, busy, condition, preempt, hold, refuse, comfyui, vram, reserve, preload, startup]
+config_keys: [tenants, tenants.*.models, tenants.*.groups, tenants.*.priority, tenants.*.vram, tenants.*.condition, tenants.*.busy, tenants.*.drain, tenants.*.interval, tenants.*.onBlocked, vramReserve, unloadTimeout, hooks.on_startup.preload]
 updated: 2026-10-05
 ---
 
@@ -55,14 +55,23 @@ tenants:
 status equals `status` (default 200). When `json` is set, the value at that
 dot path (`a.b`, `items.0.state`) must also be true, a non-zero number, or a
 non-empty string, array or object. The cmd form is true when the command
-exits 0. A different status, or a non-zero exit, reads false.
+exits 0. A different status, or a non-zero exit, reads false. `cmd` is split
+into arguments and run directly, not through a shell, so `;`, `&&`, pipes and
+redirects don't work: put them in a script and name the script, or use
+`cmd: sh -c "<command>"`.
 
 A probe that fails is not a reading. A probe fails when the request or
 command can't run, when the body isn't JSON, or when it takes longer than
 `interval` seconds. A failed `condition` probe changes nothing: the tenant
 keeps its last reading, so a slow or briefly unreachable endpoint neither
-releases held requests nor claims the GPU. Before the first reading the tenant
-doesn't want the GPU. A failed `busy` probe during a drain reads idle.
+releases held requests nor claims the GPU. Until a tenant's first condition
+probe finishes, nobody knows whether it wants the GPU, so loads of every
+lower tenant's models are held or refused, preloads from
+`hooks.on_startup.preload` included. A preload is sent once: held, it loads
+when the gate opens; refused, it logs `failed to preload model <id>: status
+503` and the model stays unloaded until a request asks for it. A first probe that fails releases them,
+and the tenant doesn't want the GPU until a probe reads true. A failed `busy`
+probe during a drain reads idle.
 
 `drain` is an action: a url request (`method` defaults to POST, `body` is sent
 as JSON) or a command.
@@ -110,8 +119,14 @@ tenants: decision time=2026-10-05T14:02:11Z tenant=chat model=qwen action=hold p
 
 - **The higher tenant loads next to the lower one.** The condition is polled,
   so a higher tenant wants the GPU only after a poll has read it true. A
-  request in the first `interval` seconds sees no conflict. Lower `interval`,
-  or make the condition turn true before the workload starts.
+  request between the workload starting and the next poll sees no conflict.
+  Lower `interval`, or make the condition turn true before the workload
+  starts.
+- **Lower models wait right after startup.** Until a higher tenant's first
+  condition probe finishes, its lower tenants' requests are held, and under
+  `onBlocked: refuse` get a 503 of type `tenant_condition_pending`. The
+  decision line's probe reads `condition of <name>: not read yet`. A slow
+  probe holds them for up to `interval` seconds.
 - **A model outside every tenant still loads.** Tenants never hold, refuse or
   drain models that no tenant owns. Give each GPU model a tenant.
 - **Lower tenants stay blocked after the higher workload ended.** The
