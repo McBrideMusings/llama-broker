@@ -93,6 +93,12 @@ func (b *baseRouter) Wake() {
 // stopped are left out: they run no drain and must not widen its deadline.
 // Call the returned func after the batch has stopped.
 func (b *baseRouter) beginStops(ids []string) (end func()) {
+	return b.tenants.BeginStops(b.stopTimeouts(ids))
+}
+
+// stopTimeouts maps each process in ids that is not already stopped to its
+// unloadTimeout.
+func (b *baseRouter) stopTimeouts(ids []string) map[string]time.Duration {
 	timeouts := make(map[string]time.Duration, len(ids))
 	for _, id := range ids {
 		p, ok := b.processes[id]
@@ -104,12 +110,31 @@ func (b *baseRouter) beginStops(ids []string) (end func()) {
 		}
 		timeouts[id] = b.unloadTimeout(id)
 	}
-	return b.tenants.BeginStops(timeouts)
+	return timeouts
 }
 
-// beginStopsAll is beginStops for every process, as shutdown stops them.
-func (b *baseRouter) beginStopsAll() (end func()) {
-	return b.beginStops(slices.Collect(maps.Keys(b.processes)))
+// beginStopsAll is beginStops for every process, as shutdown stops them. Each
+// tenant's drain, and each wait on a drain already running, ends within limit,
+// so a long unloadTimeout cannot hold shutdown past its own timeout.
+func (b *baseRouter) beginStopsAll(limit time.Duration) (end func()) {
+	return b.tenants.BeginStopsWithin(b.stopTimeouts(slices.Collect(maps.Keys(b.processes))), limit)
+}
+
+// beginUnload is beginStops for an unload, and also drains the targets' tenants
+// here, on the caller's goroutine. The stops then run on the run loop, where
+// the stop hook finds the episode drained and returns at once, so a busy
+// tenant never holds up requests for other models.
+func (b *baseRouter) beginUnload(ids []string) (end func()) {
+	timeouts := b.stopTimeouts(ids)
+	end = b.tenants.BeginStops(timeouts)
+	var wg sync.WaitGroup
+	for id, timeout := range timeouts {
+		if hook := b.tenants.StopHook(id); hook != nil {
+			wg.Go(func() { hook(timeout) })
+		}
+	}
+	wg.Wait()
+	return end
 }
 
 // StopModels implements tenants.Router. It stops the processes directly rather

@@ -130,3 +130,93 @@ func TestTenants_CommandProbeKillsChildAtDeadline(t *testing.T) {
 		t.Fatalf("probe %v cut off by its deadline has no error", res)
 	}
 }
+
+// busyServer answers {"busy": <busy>} on /queue and counts posts to /free.
+func busyServer(t *testing.T, busy *atomic.Bool, freed *atomic.Int32) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/free" {
+			freed.Add(1)
+			return
+		}
+		if busy.Load() {
+			io.WriteString(w, `{"busy": true}`)
+		} else {
+			io.WriteString(w, `{"busy": false}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func TestTenants_StopJoiningARunningDrainMarksItsEpisodeDrained(t *testing.T) {
+	var busy atomic.Bool
+	var freed atomic.Int32
+	busy.Store(true)
+	m := busyTenant(busyServer(t, &busy, &freed), logmon.New())
+	hook := m.StopHook("lo-model")
+
+	// A stop outside any episode (a ttl unload) starts a drain.
+	ttl := make(chan struct{})
+	go func() { hook(5 * time.Second); close(ttl) }()
+	for m.Status(nil, nil).Tenants[0].Drains != 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	// An unload opens an episode and its first stop joins that drain.
+	end := m.BeginStops(map[string]time.Duration{"lo-model": 5 * time.Second})
+	defer end()
+	joined := make(chan struct{})
+	go func() { hook(5 * time.Second); close(joined) }()
+	time.Sleep(50 * time.Millisecond)
+	busy.Store(false)
+	<-ttl
+	<-joined
+
+	// The unload's next stop of the model finds the episode drained.
+	hook(5 * time.Second)
+	if drains, n := m.Status(nil, nil).Tenants[0].Drains, freed.Load(); drains != 1 || n != 1 {
+		t.Fatalf("drains %d, drain actions %d; want 1 and 1: the joined drain covers the episode", drains, n)
+	}
+}
+
+func TestTenants_ShutdownLimitBoundsAWaitOnARunningDrain(t *testing.T) {
+	var busy atomic.Bool
+	var freed atomic.Int32
+	busy.Store(true)
+	log := logmon.New()
+	m := busyTenant(busyServer(t, &busy, &freed), log)
+	hook := m.StopHook("lo-model")
+
+	// An unload's drain runs with the model's 5s unloadTimeout.
+	go hook(5 * time.Second)
+	for m.Status(nil, nil).Tenants[0].Drains != 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Shutdown's stop of the same model waits on it for at most its 200ms limit.
+	end := m.BeginStopsWithin(map[string]time.Duration{"lo-model": 5 * time.Second}, 200*time.Millisecond)
+	defer end()
+	start := time.Now()
+	hook(5 * time.Second)
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("shutdown's stop waited %s on the running drain, want about the 200ms limit", took)
+	}
+	if !strings.Contains(string(log.GetHistory()), "the drain started by the stop of lo-model is still running after 200ms, stopping anyway") {
+		t.Fatalf("log is missing the stopping-anyway line:\n%s", log.GetHistory())
+	}
+	busy.Store(false)
+}
+
+func TestTenants_ShutdownLimitCapsTheDrain(t *testing.T) {
+	var busy atomic.Bool
+	var freed atomic.Int32
+	busy.Store(true)
+	m := busyTenant(busyServer(t, &busy, &freed), logmon.New())
+
+	end := m.BeginStopsWithin(map[string]time.Duration{"lo-model": 5 * time.Second}, 200*time.Millisecond)
+	defer end()
+	start := time.Now()
+	m.StopHook("lo-model")(5 * time.Second)
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("drain took %s under a 200ms shutdown limit", took)
+	}
+}

@@ -11,6 +11,7 @@ import (
 // in the episode skips the drain.
 type episode struct {
 	timeouts  map[string]time.Duration // the episode's models and their unloadTimeouts
+	limit     time.Duration            // cap on the drain's timeout; 0 for none
 	drainedBy string                   // model whose stop drained the tenant; "" until then
 }
 
@@ -27,6 +28,13 @@ type drainRun struct {
 // the models and then calls end. Stops of one tenant inside the episode share
 // a single drain, bounded by the largest of their unloadTimeouts.
 func (m *Manager) BeginStops(timeouts map[string]time.Duration) (end func()) {
+	return m.BeginStopsWithin(timeouts, 0)
+}
+
+// BeginStopsWithin is BeginStops with every drain in the episode, and every
+// wait of one of its stops on a drain already running, cut off at limit.
+// Shutdown passes its own timeout here.
+func (m *Manager) BeginStopsWithin(timeouts map[string]time.Duration, limit time.Duration) (end func()) {
 	if m == nil {
 		return func() {}
 	}
@@ -37,7 +45,7 @@ func (m *Manager) BeginStops(timeouts map[string]time.Duration) (end func()) {
 			continue
 		}
 		if opened[t] == nil {
-			opened[t] = &episode{timeouts: map[string]time.Duration{}}
+			opened[t] = &episode{timeouts: map[string]time.Duration{}, limit: limit}
 		}
 		opened[t].timeouts[id] = timeout
 	}
@@ -57,8 +65,9 @@ func (m *Manager) BeginStops(timeouts map[string]time.Duration) (end func()) {
 
 // joinDrain runs inside model's stop hook. It reports whether this stop runs a
 // drain, and the unloadTimeout that drain must finish within: the largest
-// among model's open episodes, or model's own outside any. A stop that does
-// not run one returns once the drain covering it has ended.
+// among model's open episodes and model's own, cut to the smallest limit among
+// those episodes. A stop that does not run one returns once the drain covering
+// it has ended, or once that timeout has passed, whichever is first.
 func (m *Manager) joinDrain(t *tenant, model string, unloadTimeout time.Duration) (run *drainRun, timeout time.Duration, runs bool) {
 	skip := func(first string) {
 		m.record(Decision{Tenant: t.name, Model: model, Action: ActionDrain,
@@ -67,6 +76,7 @@ func (m *Manager) joinDrain(t *tenant, model string, unloadTimeout time.Duration
 	t.drainMu.Lock()
 	var covers []*episode
 	timeout = unloadTimeout
+	var limit time.Duration
 	for _, ep := range t.episodes {
 		if _, ok := ep.timeouts[model]; !ok {
 			continue
@@ -80,11 +90,31 @@ func (m *Manager) joinDrain(t *tenant, model string, unloadTimeout time.Duration
 		for _, d := range ep.timeouts {
 			timeout = max(timeout, d)
 		}
+		if ep.limit > 0 && (limit == 0 || ep.limit < limit) {
+			limit = ep.limit
+		}
+	}
+	if limit > 0 {
+		timeout = min(timeout, limit)
 	}
 	if r := t.run; r != nil {
 		t.drainMu.Unlock()
-		<-r.done
-		skip(r.first)
+		wait := time.NewTimer(timeout)
+		defer wait.Stop()
+		select {
+		case <-r.done:
+			t.drainMu.Lock()
+			for _, ep := range covers {
+				if ep.drainedBy == "" {
+					ep.drainedBy = r.first
+				}
+			}
+			t.drainMu.Unlock()
+			skip(r.first)
+		case <-wait.C:
+			m.recordAt(m.log.Warnf, Decision{Tenant: t.name, Model: model, Action: ActionDrain,
+				Reason: fmt.Sprintf("the drain started by the stop of %s is still running after %s, stopping anyway", r.first, timeout)})
+		}
 		return nil, 0, false
 	}
 	run = &drainRun{first: model, covers: covers, done: make(chan struct{})}

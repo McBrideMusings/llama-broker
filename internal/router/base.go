@@ -312,7 +312,7 @@ func (b *baseRouter) handleShutdown(req shutdownReq) {
 		stopTimeout = b.healthCheckTimeout()
 	}
 
-	defer b.beginStopsAll()()
+	defer b.beginStopsAll(stopTimeout)()
 	var wg sync.WaitGroup
 	for i, p := range b.processes {
 		wg.Add(1)
@@ -436,7 +436,7 @@ func (b *baseRouter) Unload(timeout time.Duration, models ...string) {
 	if len(targets) == 0 {
 		return
 	}
-	defer b.beginStops(targets)()
+	defer b.beginUnload(targets)()
 
 	if timeout > 0 {
 		b.sendUnload(targets, timeout)

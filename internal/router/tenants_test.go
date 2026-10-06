@@ -17,12 +17,10 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 )
 
-// TestTenants_EndToEndDrainStopLoadOrder runs two real upstreams (the
-// simple-responder binary) as tenants. lo is loaded and reports busy for two
-// seconds; when hi's condition turns true, lo must drain (wait out busy, run its
-// drain action), stop, and only then may hi load. A lo request sent while hi
-// wants the GPU is held, and runs once hi's condition clears.
-func TestTenants_EndToEndDrainStopLoadOrder(t *testing.T) {
+// responderPath returns the built simple-responder binary, skipping the test
+// when it is missing.
+func responderPath(t *testing.T) string {
+	t.Helper()
 	responder := filepath.Join("..", "..", "build", fmt.Sprintf("simple-responder_%s_%s", runtime.GOOS, runtime.GOARCH))
 	if runtime.GOOS == "windows" {
 		responder = filepath.Join("..", "..", "build", "simple-responder.exe")
@@ -31,6 +29,16 @@ func TestTenants_EndToEndDrainStopLoadOrder(t *testing.T) {
 		t.Skipf("simple-responder not found at %s, run `make simple-responder`", responder)
 	}
 	responder, _ = filepath.Abs(responder)
+	return responder
+}
+
+// TestTenants_EndToEndDrainStopLoadOrder runs two real upstreams (the
+// simple-responder binary) as tenants. lo is loaded and reports busy for two
+// seconds; when hi's condition turns true, lo must drain (wait out busy, run its
+// drain action), stop, and only then may hi load. A lo request sent while hi
+// wants the GPU is held, and runs once hi's condition clears.
+func TestTenants_EndToEndDrainStopLoadOrder(t *testing.T) {
+	responder := responderPath(t)
 
 	var hiWants atomic.Bool
 	var busyUntil atomic.Int64
@@ -197,5 +205,135 @@ tenants:
 			t.Fatalf("log line %q missing or out of order after offset %d; log:\n%s", want, pos, history)
 		}
 		pos += i + len(want)
+	}
+}
+
+// busyTenantRouter starts a Group router with two real upstreams: job, whose
+// tenant reads busy from busy and posts its drain to /free, and other, with no
+// tenant. Both are loaded before it returns.
+func busyTenantRouter(t *testing.T, busy *atomic.Bool, drained *atomic.Int32, unloadTimeout int) (*Group, *logmon.Group, func(string) int) {
+	t.Helper()
+	responder := responderPath(t)
+	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/queue":
+			fmt.Fprintf(w, `{"busy": %v}`, busy.Load())
+		case "/free":
+			drained.Add(1)
+		}
+	}))
+	t.Cleanup(control.Close)
+
+	cfg, err := config.LoadConfigFromReader(strings.NewReader(fmt.Sprintf(`
+logLevel: info
+unloadTimeout: %[3]d
+models:
+  job:
+    cmd: %[1]s --port ${PORT} --silent --respond job
+  other:
+    cmd: %[1]s --port ${PORT} --silent --respond other
+groups:
+  job-group: {members: [job], exclusive: false, swap: false}
+  other-group: {members: [other], exclusive: false, swap: false}
+tenants:
+  job:
+    models: [job]
+    priority: 1
+    interval: 1
+    busy: {url: "%[2]s/queue", json: "busy"}
+    drain: {url: "%[2]s/free"}
+`, responder, control.URL, unloadTimeout)))
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	logs := logmon.NewGroup(io.Discard, false, false, false)
+	rt, err := NewGroup(cfg, logs)
+	if err != nil {
+		t.Fatalf("NewGroup: %v", err)
+	}
+	chat := func(model string) int {
+		body := fmt.Sprintf(`{"model": %q, "messages": [{"role": "user", "content": "x"}]}`, model)
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		rt.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for _, model := range []string{"job", "other"} {
+		if code := chat(model); code != http.StatusOK {
+			t.Fatalf("loading %s: %d", model, code)
+		}
+	}
+	return rt, logs, chat
+}
+
+// TestTenants_UnloadDrainDoesNotBlockOtherRequests unloads a busy tenant's
+// model and sends a request for another model during the drain: it is served
+// at once, not after the drain.
+func TestTenants_UnloadDrainDoesNotBlockOtherRequests(t *testing.T) {
+	var busy atomic.Bool
+	var drained atomic.Int32
+	rt, logs, chat := busyTenantRouter(t, &busy, &drained, 10)
+	defer rt.Shutdown(5 * time.Second)
+
+	busy.Store(true)
+	unloaded := make(chan struct{})
+	go func() {
+		rt.Unload(0, "job")
+		close(unloaded)
+	}()
+	for !strings.Contains(string(logs.ProxyLogs.GetHistory()), "busy, waiting") {
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	start := time.Now()
+	if code := chat("other"); code != http.StatusOK {
+		t.Fatalf("other during job's drain: %d", code)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("other took %s during job's drain, want it served without waiting for the drain", took)
+	}
+	select {
+	case <-unloaded:
+		t.Fatal("unload returned while job was still busy")
+	default:
+	}
+
+	busy.Store(false)
+	select {
+	case <-unloaded:
+	case <-time.After(5 * time.Second):
+		t.Fatal("unload never returned after job went idle")
+	}
+	if n := drained.Load(); n != 1 {
+		t.Errorf("drain action ran %d times, want 1", n)
+	}
+	if _, running := rt.RunningModels()["job"]; running {
+		t.Error("job still running after the unload returned")
+	}
+	history := string(logs.ProxyLogs.GetHistory())
+	if !strings.Contains(history, `tenant=job model=job action=drain probe="" reason="not draining again: the stop of job drained this tenant in the same stop batch"`) {
+		t.Errorf("the run loop's stop drained again; log:\n%s", history)
+	}
+}
+
+// TestTenants_ShutdownCapsDrainAtItsTimeout shuts down while a tenant with a
+// 60s unloadTimeout stays busy: the drain gives up at shutdown's 1s timeout.
+func TestTenants_ShutdownCapsDrainAtItsTimeout(t *testing.T) {
+	var busy atomic.Bool
+	var drained atomic.Int32
+	rt, logs, _ := busyTenantRouter(t, &busy, &drained, 60)
+
+	busy.Store(true)
+	start := time.Now()
+	rt.Shutdown(time.Second)
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("shutdown took %s with a 1s timeout, want the drain capped at 1s", took)
+	}
+	history := string(logs.ProxyLogs.GetHistory())
+	for _, line := range []string{"(unloadTimeout 1s)", "still busy after 1s, stopping anyway"} {
+		if !strings.Contains(history, line) {
+			t.Errorf("log is missing %q; log:\n%s", line, history)
+		}
 	}
 }
