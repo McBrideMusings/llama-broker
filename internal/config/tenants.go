@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -44,6 +45,11 @@ type TenantConfig struct {
 	// (HTTP 503).
 	OnBlocked string `yaml:"onBlocked"`
 
+	// IdleLoad names one of the tenant's models to load whenever the GPU is
+	// idle: no tenant wants it and no tenant's model is running. At most one
+	// tenant may set it. Resolved to the real model ID by validateTenants.
+	IdleLoad string `yaml:"idleLoad"`
+
 	// Members is Models plus every member of Groups, resolved to real model
 	// IDs. Filled in by LoadConfigFromReader.
 	Members []string `yaml:"-"`
@@ -74,6 +80,7 @@ type TenantAction struct {
 // every tenant's Members. It runs after routing groups are normalized.
 func validateTenants(config *Config) error {
 	owner := make(map[string]string)
+	idleLoader := ""
 	names := make([]string, 0, len(config.Tenants))
 	for name := range config.Tenants {
 		names = append(names, name)
@@ -119,6 +126,18 @@ func validateTenants(config *Config) error {
 		}
 		sort.Strings(t.Members)
 
+		if t.IdleLoad != "" {
+			if idleLoader != "" {
+				return fmt.Errorf("tenants.%s.idleLoad: tenant %s already sets idleLoad; only one tenant may", name, idleLoader)
+			}
+			idleLoader = name
+			real, found := config.RealModelName(t.IdleLoad)
+			if !found || !slices.Contains(t.Members, real) {
+				return fmt.Errorf("tenants.%s.idleLoad %q is not one of the tenant's models %v", name, t.IdleLoad, t.Members)
+			}
+			t.IdleLoad = real
+		}
+
 		switch t.OnBlocked {
 		case "":
 			t.OnBlocked = TenantOnBlockedHold
@@ -151,6 +170,20 @@ func validateTenants(config *Config) error {
 		config.Tenants[name] = t
 	}
 	return validateVRAMReserve(config, owner)
+}
+
+// PersistentModels returns the members of every persistent routing group,
+// sorted. Other groups can't unload them, so they stay loaded beside whatever
+// else runs.
+func (c *Config) PersistentModels() []string {
+	var ids []string
+	for _, g := range c.Routing.Router.Settings.Groups {
+		if g.Persistent {
+			ids = append(ids, g.Members...)
+		}
+	}
+	sort.Strings(ids)
+	return slices.Compact(ids)
 }
 
 // validateVRAMReserve checks that, with a reserve set, every model belongs to a

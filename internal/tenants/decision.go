@@ -179,6 +179,7 @@ type TenantStatus struct {
 	VRAMMiB   int      `json:"vramMiB"` // declared need; 0 when not declared
 	OnBlocked string   `json:"onBlocked"`
 	Models    []string `json:"models"`
+	IdleLoad  string   `json:"idleLoad,omitempty"` // loaded whenever the GPU is idle
 	// WantsGPU is the last condition reading; always false without a condition.
 	WantsGPU  bool         `json:"wantsGPU"`
 	Condition *ProbeStatus `json:"condition"` // nil when not configured
@@ -229,6 +230,7 @@ func (m *Manager) Status(running map[string]process.ProcessState, held map[strin
 			VRAMMiB:   t.cfg.VRAM,
 			OnBlocked: t.cfg.OnBlocked,
 			Models:    append([]string{}, t.cfg.Members...),
+			IdleLoad:  t.cfg.IdleLoad,
 			WantsGPU:  t.wants,
 			Stopping:  t.stopping,
 			Loaded:    []LoadedModel{},

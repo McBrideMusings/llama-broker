@@ -955,7 +955,8 @@
                     "busy": {"$ref": "#/definitions/tenantProbe", "description": "Polled during a drain; the stop waits while it is true or the probe fails, up to the model's unloadTimeout."},
                     "drain": {"$ref": "#/definitions/tenantAction", "description": "Run once the busy probe reads false, just before the stop."},
                     "interval": {"type": "integer", "minimum": 0, "default": 5, "description": "Seconds between condition polls and between busy polls during a drain."},
-                    "onBlocked": {"type": "string", "enum": ["hold", "refuse"], "default": "hold", "description": "What a request for this tenant's models gets while a higher tenant wants the GPU: hold (wait in the queue) or refuse (HTTP 503)."}
+                    "onBlocked": {"type": "string", "enum": ["hold", "refuse"], "default": "hold", "description": "What a request for this tenant's models gets while a higher tenant wants the GPU: hold (wait in the queue) or refuse (HTTP 503)."},
+                    "idleLoad": {"type": "string", "description": "One of this tenant's models (or an alias) to load whenever the GPU is idle: no process runs or starts, no request is queued, and no tenant wants the GPU, has an unread condition or is stopping. Checked every interval; the gate refuses the load, never holds it. Do not give this model a ttl. At most one tenant may set it."}
                 },
                 "additionalProperties": false
             }

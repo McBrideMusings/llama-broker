@@ -24,6 +24,7 @@ type fakeRouter struct {
 	running map[string]process.ProcessState
 	stopped [][]string
 	wakes   int
+	queued  int
 }
 
 func (f *fakeRouter) RunningModels() map[string]process.ProcessState {
@@ -49,6 +50,12 @@ func (f *fakeRouter) Wake() {
 	f.mu.Lock()
 	f.wakes++
 	f.mu.Unlock()
+}
+
+func (f *fakeRouter) Queued() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.queued
 }
 
 func (f *fakeRouter) snapshot() ([][]string, int) {

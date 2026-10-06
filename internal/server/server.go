@@ -267,6 +267,7 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 
 	s.routes()
 	s.startPreload()
+	s.startIdleLoad()
 	return s, nil
 }
 

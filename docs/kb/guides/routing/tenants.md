@@ -2,9 +2,9 @@
 title: Sharing one GPU between workloads with tenants
 summary: Rank GPU workloads by priority so a higher one holds or refuses lower models, and drains then stops a lower one to make room.
 category: guides
-tags: [tenants, priority, gpu, drain, busy, condition, preempt, hold, refuse, comfyui, vram, reserve, preload, startup]
-config_keys: [tenants, tenants.*.models, tenants.*.groups, tenants.*.priority, tenants.*.vram, tenants.*.condition, tenants.*.busy, tenants.*.drain, tenants.*.interval, tenants.*.onBlocked, vramReserve, unloadTimeout, hooks.on_startup.preload]
-updated: 2026-10-05
+tags: [tenants, priority, idle, gpu, drain, busy, condition, preempt, hold, refuse, comfyui, vram, reserve, preload, startup]
+config_keys: [tenants, tenants.*.models, tenants.*.groups, tenants.*.priority, tenants.*.idleLoad, tenants.*.vram, tenants.*.condition, tenants.*.busy, tenants.*.drain, tenants.*.interval, tenants.*.onBlocked, vramReserve, unloadTimeout, hooks.on_startup.preload]
+updated: 2026-10-06
 ---
 
 # Sharing one GPU between workloads with tenants
@@ -128,6 +128,52 @@ of the 30-second shutdown deadline on SIGTERM), even when `unloadTimeout` is
 longer, and stops waiting on a drain an unload had already started. A job
 still busy then is cut off, so on a reload with a long render running, wait
 for it to finish first.
+
+## Loading a default model when the GPU is idle
+
+`idleLoad` names one model of a tenant that the broker loads whenever the GPU
+is idle, so a chat model is warm again after a render or a higher workload
+ends. Every `interval` seconds of that tenant, the broker checks that no
+process is running or starting (tenant or not, except members of a
+persistent group), no request is queued, and no
+tenant wants the GPU, has an unread condition or is being stopped. When all
+of that holds, it sends one load request for the model. The tenant gate
+refuses that request rather than holding it, under either `onBlocked`, so a
+GPU that stopped being idle in the meantime is left alone; the next check
+tries again. At most one tenant may set `idleLoad`.
+
+```yaml
+tenants:
+  comfy:
+    priority: 10
+    models: [comfyui]
+  chat:
+    priority: 1
+    models: [qwen-chat, coder]
+    idleLoad: qwen-chat     # warm whenever nothing else runs
+```
+
+Here a request for `comfyui` evicts `qwen-chat` (they share a swap group);
+when the render ends and `comfyui`'s `ttl` stops it, `qwen-chat` loads again
+within `interval` seconds. Each idle load writes a decision line with
+`action=idle-load`, and `GET /api/tenants` shows the model as `idleLoad`.
+
+- **The model reloads right after an unload, or its `ttl` does nothing.** An
+  unload leaves the GPU idle, so the next check loads it again. Don't give the
+  `idleLoad` model a `ttl`; to free the GPU, request another tenant's model or
+  remove `idleLoad`.
+- **It never loads.** Any running model counts, including one outside every
+  tenant and the idle model's own siblings; so does a queued request, and a
+  tenant whose condition endpoint keeps reading true. A model meant to stay
+  loaded beside it, such as an embedder, belongs in a group with
+  `persistent: true`, which the check ignores.
+- **A load that fails** logs a warning `idle load of <model> failed, next try
+  in <wait>`. A model gone within a minute of loading while nothing else ran
+  or was requested, such as one that
+  crashes after its first answer, logs `idle model <model> was gone within
+  <time> of loading, next try in <wait>`. Either doubles the wait, up to 10
+  minutes; a load that stays up resets it. A load the gate turns away logs
+  `idle load turned away` and does not grow the wait.
 
 ## Keeping VRAM free for other programs
 

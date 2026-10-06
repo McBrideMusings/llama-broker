@@ -47,21 +47,38 @@ func (s *Server) handleAPITenants(w http.ResponseWriter, r *http.Request) {
 // background once the gate opens.
 func (s *Server) preload(modelID string) {
 	tenants.Preload(s.shutdownCtx, func(ctx context.Context) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
-		if err != nil {
-			return
-		}
-		req = req.WithContext(swaputil.SetContext(req.Context(), swaputil.ReqContextData{Model: modelID, ModelID: modelID, Metadata: make(map[string]string)}))
-
-		dw := &discardResponseWriter{status: http.StatusOK}
-		s.local.ServeHTTP(dw, req)
-
-		success := dw.status < http.StatusBadRequest
+		success := s.loadModel(ctx, modelID)
 		if !success {
-			s.logs.ProxyLogs.Errorf("failed to preload model %s: status %d", modelID, dw.status)
+			s.logs.ProxyLogs.Errorf("failed to preload model %s", modelID)
 		}
 		event.Emit(swaputil.ModelPreloadedEvent{ModelName: modelID, Success: success})
 	})
+}
+
+// startIdleLoad hands the local router the loader for a tenant's idleLoad
+// model.
+func (s *Server) startIdleLoad() {
+	if r, ok := s.local.(router.IdleLoadStarter); ok {
+		r.StartIdleLoad(s.loadModel)
+	}
+}
+
+// loadModel sends a GET / for modelID through the local router and reports
+// whether it was served, which loads the model if it was not running.
+func (s *Server) loadModel(ctx context.Context, modelID string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
+	if err != nil {
+		return false
+	}
+	req = req.WithContext(swaputil.SetContext(req.Context(), swaputil.ReqContextData{Model: modelID, ModelID: modelID, Metadata: make(map[string]string)}))
+
+	dw := &discardResponseWriter{status: http.StatusOK}
+	s.local.ServeHTTP(dw, req)
+	if dw.status >= http.StatusBadRequest {
+		s.logs.ProxyLogs.Errorf("loading model %s: status %d", modelID, dw.status)
+		return false
+	}
+	return true
 }
 
 // onTenantDecision forwards tenant decisions to an /api/events client.

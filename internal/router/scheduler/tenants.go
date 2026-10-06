@@ -45,6 +45,10 @@ func (s *FIFO) tenantRecord(model string, reason error, refuse bool) {
 	}
 }
 
+// QueueLen counts every queued request, held or not. It reads the queue, so
+// only the run-loop goroutine may call it.
+func (s *FIFO) QueueLen() int { return len(s.queued) }
+
 // HeldRequests counts queued requests the tenant gate blocks, by model. It
 // reads the queue, so only the run-loop goroutine may call it.
 func (s *FIFO) HeldRequests() map[string]int {

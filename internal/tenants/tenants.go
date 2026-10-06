@@ -32,6 +32,8 @@ type Router interface {
 	StopModels(ids ...string)
 	// Wake makes the scheduler re-evaluate its queue.
 	Wake()
+	// Queued counts requests waiting in the scheduler's queue, held or not.
+	Queued() int
 }
 
 type tenant struct {
@@ -78,6 +80,8 @@ type Manager struct {
 	// start nothing (fast path, held counts) only leave a reading that the
 	// next swap's pass replaces. Guarded by mu.
 	admitted map[string]string
+	// resident is the models the idle check ignores; see SetResident.
+	resident map[string]bool
 }
 
 // New builds a Manager from validated tenant configs. It returns nil when there
@@ -139,6 +143,9 @@ func (m *Manager) Start(ctx context.Context, r Router) {
 // refusal becomes a hold, since a preload has no client to retry after a 503.
 func (m *Manager) Block(ctx context.Context, model string, alongside []string) (reason error, refuse bool) {
 	reason, refuse = m.block(model, alongside)
+	if refused := refuseIdleLoad(ctx, reason); refused {
+		return reason, true
+	}
 	return holdPreload(ctx, reason, refuse)
 }
 

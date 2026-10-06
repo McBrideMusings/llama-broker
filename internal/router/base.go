@@ -68,6 +68,8 @@ type baseRouter struct {
 	// held is the run loop's latest count of tenant-held requests by model,
 	// published for readers outside the run loop.
 	held atomic.Pointer[map[string]int]
+	// queued is the run loop's latest count of queued requests, held or not.
+	queued atomic.Int64
 
 	runDone chan struct{}
 
@@ -112,6 +114,7 @@ func newBaseRouter(
 		return nil, err
 	}
 	b.schedule = sched
+	b.tenants.SetResident(conf.PersistentModels())
 	return b, nil
 }
 

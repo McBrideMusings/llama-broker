@@ -52,7 +52,14 @@ func (b *baseRouter) publishHeld() {
 	}
 	held := h.HeldRequests()
 	b.held.Store(&held)
+	if q, ok := b.schedule.(interface{ QueueLen() int }); ok {
+		b.queued.Store(int64(q.QueueLen()))
+	}
 }
+
+// Queued implements tenants.Router: the requests queued at the run loop's
+// latest turn, held or not.
+func (b *baseRouter) Queued() int { return int(b.queued.Load()) }
 
 // VRAMSetter is how the server hands a local router the card total and the
 // VRAM reserve. Every local router implements it.
@@ -69,6 +76,22 @@ var (
 // against, both in MiB.
 func (b *baseRouter) SetVRAM(totalMiB int64, reserveMiB int) {
 	b.tenants.SetVRAM(totalMiB, reserveMiB)
+}
+
+// IdleLoadStarter is how the server hands a local router the function that
+// loads a tenant's idleLoad model. Every local router implements it.
+type IdleLoadStarter interface {
+	StartIdleLoad(load tenants.IdleLoader)
+}
+
+var (
+	_ IdleLoadStarter = (*Matrix)(nil)
+	_ IdleLoadStarter = (*Group)(nil)
+)
+
+// StartIdleLoad starts the tenants' idle watcher until the router shuts down.
+func (b *baseRouter) StartIdleLoad(load tenants.IdleLoader) {
+	b.tenants.StartIdleLoad(b.shutdownCtx, load)
 }
 
 // TenantStatus reports every tenant's state for GET /api/tenants.

@@ -40,6 +40,7 @@ tenants:
     priority: 1
     groups: [llms]
     models: [chat-alias]
+    idleLoad: chat-alias
 `))
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -64,6 +65,9 @@ tenants:
 	if got := strings.Join(cfg.Tenants["llm"].Members, ","); got != "chat,coder" {
 		t.Errorf("llm members=%q want chat,coder (alias resolved, group expanded, deduplicated)", got)
 	}
+	if got := cfg.Tenants["llm"].IdleLoad; got != "chat" {
+		t.Errorf("llm idleLoad=%q want chat (alias resolved)", got)
+	}
 }
 
 func TestTenants_ConfigRejectsInvalid(t *testing.T) {
@@ -87,6 +91,11 @@ func TestTenants_ConfigRejectsInvalid(t *testing.T) {
   a: {condition: {cmd: "true", json: x}}`, "status, json and method apply to url probes only"},
 		"negative interval": {`
   a: {interval: -1}`, "tenants.a.interval must be >= 0"},
+		"idleLoad outside tenant": {`
+  a: {models: [chat], idleLoad: coder}`, `tenants.a.idleLoad "coder" is not one of the tenant's models [chat]`},
+		"idleLoad on two tenants": {`
+  a: {models: [chat], idleLoad: chat}
+  b: {models: [coder], idleLoad: coder}`, "tenants.b.idleLoad: tenant a already sets idleLoad; only one tenant may"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
