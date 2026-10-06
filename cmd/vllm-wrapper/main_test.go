@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -98,6 +103,36 @@ func TestStartDaemon(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "daemon did not become healthy") {
 		t.Errorf("error expected to contain 'daemon did not become healthy', got %v", err)
+	}
+}
+
+// TestStartDaemon_ReapsKilledProcess verifies that a daemon killed for never
+// becoming healthy is reaped rather than left as a zombie.
+func TestStartDaemon_ReapsKilledProcess(t *testing.T) {
+	// startDaemon logs the PID it started; read it from there.
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+
+	if err := startDaemon([]string{"sleep", "30"}, "http://127.0.0.1:12345/health", "/health", 10*time.Millisecond); err == nil {
+		t.Fatal("expected error (health check fails)")
+	}
+
+	m := regexp.MustCompile(`Started daemon with PID (\d+)`).FindStringSubmatch(logs.String())
+	if m == nil {
+		t.Fatalf("no PID in startDaemon log: %q", logs.String())
+	}
+	pid, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("parse pid %q: %v", m[1], err)
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatalf("FindProcess: %v", err)
+	}
+	// Signal 0 succeeds for a live or zombie process and fails once reaped.
+	if err := proc.Signal(syscall.Signal(0)); err == nil {
+		t.Errorf("process %d still exists after startDaemon returned", pid)
 	}
 }
 

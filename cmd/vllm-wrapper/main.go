@@ -343,8 +343,10 @@ func startDaemon(startArgs []string, vllmURL string, healthPath string, waitTime
 	log.Printf("Started daemon with PID %d, waiting for healthy state", cmd.Process.Pid)
 	err := waitForHealthyWithPath(vllmURL, healthPath, waitTimeout)
 	if err != nil {
-		// If we fail to become healthy, kill the started process.
+		// If we fail to become healthy, kill the started process and reap it
+		// so it does not stay a zombie. Wait reports the kill; ignore it.
 		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		return fmt.Errorf("daemon did not become healthy: %w", err)
 	}
 	// Daemon is healthy, we don't wait for the command to exit (it should keep running).
