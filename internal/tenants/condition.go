@@ -12,6 +12,7 @@ func (m *Manager) conditionRead(t *tenant, res probeResult) {
 	changed := t.wants != res.ok
 	t.wants = res.ok
 	t.cond, t.condAt = res, time.Now().UTC()
+	at := t.condAt
 	failed := t.condErrors
 	t.condErrors = 0
 	m.mu.Unlock()
@@ -20,7 +21,8 @@ func (m *Manager) conditionRead(t *tenant, res probeResult) {
 		m.log.Infof("tenants: %s (priority %d) condition probe recovered after %d failed polls", t.name, t.cfg.Priority, failed)
 	}
 	if changed {
-		m.log.Infof("tenants: %s (priority %d) condition %s; wants GPU: %v", t.name, t.cfg.Priority, res, res.ok)
+		m.log.Infof("tenants: %s (priority %d) condition %s; wants GPU: %v time=%s",
+			t.name, t.cfg.Priority, res, res.ok, at.Format(time.RFC3339Nano))
 	} else {
 		m.log.Debugf("tenants: %s condition %s", t.name, res)
 	}

@@ -100,6 +100,26 @@ func TestTenants_ConditionErrorKeepsClaim(t *testing.T) {
 	}
 }
 
+func TestTenants_ConditionChangeLogsReadingTime(t *testing.T) {
+	var on atomic.Bool
+	on.Store(true)
+	srv := switchServer(t, &on)
+	log := logmon.NewWriter(io.Discard)
+	m := New(twoTenants(srv.URL, config.TenantOnBlockedHold), log)
+	m.byName("hi").interval = time.Hour // one reading only
+	m.Start(t.Context(), &fakeRouter{running: map[string]process.ProcessState{}})
+	// The line is written after the reading is stored, so wait for the line.
+	eventually(t, "the condition change line", func() bool {
+		return strings.Contains(string(log.GetHistory()), "condition true")
+	})
+
+	want := "tenants: hi (priority 10) condition true (HTTP 200, on=true); wants GPU: true time=" +
+		hiCondition(m).ProbedAt.Format(time.RFC3339Nano)
+	if history := string(log.GetHistory()); !strings.Contains(history, want) {
+		t.Fatalf("log lacks %q, the reading's probedAt:\n%s", want, history)
+	}
+}
+
 func TestTenants_ConditionErrorBeforeFirstReading(t *testing.T) {
 	var mode atomic.Value
 	mode.Store("broken")

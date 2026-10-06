@@ -215,7 +215,14 @@ tenants: decision time=2026-10-04T20:15:02.1Z tenant=chat model=qwen action=hold
 tenants: decision time=2026-10-04T20:15:03.4Z tenant=comfy model=comfy action=drain probe="busy true (HTTP 200, exec_info.queue_remaining=1)" reason="busy, waiting"
 ```
 
-Condition changes log as `tenants: <name> (priority N) condition true (...)`.
+Condition changes log as one line:
+
+```text
+tenants: <name> (priority N) condition true (...); wants GPU: true time=<UTC>
+```
+
+`time` is when the probe read it, the same instant `GET /api/tenants` reports
+as `condition.probedAt` until the next poll.
 The same decisions go out on `GET /api/events` as `tenantDecision` messages
 whose data is `{time, tenant, model, action, probe, reason}`.
 
