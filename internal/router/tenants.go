@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"maps"
 	"slices"
 	"sync"
@@ -30,8 +31,8 @@ func (b *baseRouter) start() {
 }
 
 // TenantBlock implements scheduler.TenantGate.
-func (b *baseRouter) TenantBlock(model string, alongside []string) (error, bool) {
-	return b.tenants.Block(model, alongside)
+func (b *baseRouter) TenantBlock(ctx context.Context, model string, alongside []string) (error, bool) {
+	return b.tenants.Block(ctx, model, alongside)
 }
 
 // TenantRecord implements scheduler.TenantGate.

@@ -131,7 +131,7 @@ func TestTenants_ComfyUIRecipeHoldsPromptWhileHigherTenantWantsGPU(t *testing.T)
 	}
 	m.mu.Unlock()
 
-	reason, refuse := m.Block("comfyui_auto", nil)
+	reason, refuse := m.Block(t.Context(), "comfyui_auto", nil)
 	if reason == nil || refuse {
 		t.Fatalf("comfyui_auto Block = %v, refuse %v; want held", reason, refuse)
 	}

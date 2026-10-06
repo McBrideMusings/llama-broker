@@ -32,11 +32,11 @@ func TestTenants_ReserveHoldsLoadThatCutsIntoIt(t *testing.T) {
 	m.SetVRAM(8000, 2000)
 
 	// 6000 + 2000 reserve = 8000 fits exactly.
-	if reason, _ := m.Block("big-model", nil); reason != nil {
+	if reason, _ := m.Block(t.Context(), "big-model", nil); reason != nil {
 		t.Fatalf("big blocked on an empty card: %v", reason)
 	}
 	// big running: 6000 + 1000 + 2000 = 9000 > 8000.
-	reason, refuse := m.Block("small-model", []string{"big-model"})
+	reason, refuse := m.Block(t.Context(), "small-model", []string{"big-model"})
 	var re *ReserveError
 	if !errors.As(reason, &re) || refuse {
 		t.Fatalf("small with big running: reason %v refuse %v, want a held ReserveError", reason, refuse)
@@ -49,11 +49,11 @@ func TestTenants_ReserveHoldsLoadThatCutsIntoIt(t *testing.T) {
 		t.Errorf("reason %q\nwant   %q", reason, wantReason)
 	}
 	// Already running: its need is already counted.
-	if reason, _ := m.Block("big-model", []string{"big-model"}); reason != nil {
+	if reason, _ := m.Block(t.Context(), "big-model", []string{"big-model"}); reason != nil {
 		t.Errorf("running big blocked: %v", reason)
 	}
 	// big is what small's swap evicts, so it is not alongside.
-	if reason, _ := m.Block("small-model", nil); reason != nil {
+	if reason, _ := m.Block(t.Context(), "small-model", nil); reason != nil {
 		t.Errorf("small blocked once big is evicted: %v", reason)
 	}
 
@@ -94,7 +94,7 @@ func TestTenants_ReserveWarnsAboutTenantThatCanNeverLoad(t *testing.T) {
 func TestTenants_ReserveRefusesForOnBlockedRefuse(t *testing.T) {
 	m := New(reserveTenants(config.TenantOnBlockedRefuse), logmon.NewWriter(io.Discard))
 	m.SetVRAM(8000, 2000)
-	if reason, refuse := m.Block("small-model", []string{"big-model"}); reason == nil || !refuse {
+	if reason, refuse := m.Block(t.Context(), "small-model", []string{"big-model"}); reason == nil || !refuse {
 		t.Fatalf("reason %v refuse %v, want a refused ReserveError", reason, refuse)
 	}
 }
@@ -102,7 +102,7 @@ func TestTenants_ReserveRefusesForOnBlockedRefuse(t *testing.T) {
 func TestTenants_ReserveNotEnforcedWithoutTotal(t *testing.T) {
 	m := New(reserveTenants(config.TenantOnBlockedHold), logmon.NewWriter(io.Discard))
 	m.SetVRAM(0, 2000)
-	if reason, _ := m.Block("small-model", []string{"big-model"}); reason != nil {
+	if reason, _ := m.Block(t.Context(), "small-model", []string{"big-model"}); reason != nil {
 		t.Fatalf("blocked with no known total: %v", reason)
 	}
 	st := m.Status(nil, nil)

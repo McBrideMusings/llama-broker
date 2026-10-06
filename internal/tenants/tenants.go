@@ -134,7 +134,15 @@ func (m *Manager) Start(ctx context.Context, r Router) {
 // alongside it, its own and the reserve exceed the card total. alongside is the
 // models that stay loaded if model loads: running ones and in-flight swap
 // targets, less those the swap evicts.
-func (m *Manager) Block(model string, alongside []string) (reason error, refuse bool) {
+//
+// ctx is the request's context. A preload (WithPreload) is never refused: a
+// refusal becomes a hold, since a preload has no client to retry after a 503.
+func (m *Manager) Block(ctx context.Context, model string, alongside []string) (reason error, refuse bool) {
+	reason, refuse = m.block(model, alongside)
+	return holdPreload(ctx, reason, refuse)
+}
+
+func (m *Manager) block(model string, alongside []string) (reason error, refuse bool) {
 	if m == nil {
 		return nil, false
 	}

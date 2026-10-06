@@ -3,16 +3,20 @@ package tenants
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/mostlygeek/llama-swap/internal/logmon"
 )
 
 func TestTenants_PreloadWaitsForAdmittedSend(t *testing.T) {
 	sent := false
 	Preload(context.Background(), func(ctx context.Context) {
-		if reason, _ := HoldPreload(ctx, nil, false); reason != nil {
-			t.Errorf("HoldPreload with no reason returned %v", reason)
+		if reason, _ := holdPreload(ctx, nil, false); reason != nil {
+			t.Errorf("holdPreload with no reason returned %v", reason)
 		}
 		time.Sleep(50 * time.Millisecond)
 		sent = true
@@ -22,7 +26,7 @@ func TestTenants_PreloadWaitsForAdmittedSend(t *testing.T) {
 	}
 }
 
-func TestTenants_HoldPreload(t *testing.T) {
+func TestTenants_holdPreload(t *testing.T) {
 	blocked := errors.New("tenant hi wants the GPU")
 	tests := []struct {
 		name       string
@@ -42,7 +46,7 @@ func TestTenants_HoldPreload(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reason, refuse := HoldPreload(tt.ctx, tt.reason, tt.refuse)
+			reason, refuse := holdPreload(tt.ctx, tt.reason, tt.refuse)
 			if refuse != tt.wantRefuse {
 				t.Errorf("refuse = %v, want %v", refuse, tt.wantRefuse)
 			}
@@ -72,6 +76,28 @@ func TestTenants_HoldPreload(t *testing.T) {
 	}
 }
 
+func TestTenants_BlockHoldsRefusedPreload(t *testing.T) {
+	m := New(reserveTenants(config.TenantOnBlockedRefuse), logmon.NewWriter(io.Discard))
+	m.SetVRAM(8000, 2000)
+	if reason, refuse := m.Block(t.Context(), "small-model", []string{"big-model"}); reason == nil || !refuse {
+		t.Fatalf("plain request: reason %v refuse %v, want refused", reason, refuse)
+	}
+
+	got := make(chan error, 1)
+	Preload(t.Context(), func(ctx context.Context) {
+		reason, refuse := m.Block(ctx, "small-model", []string{"big-model"})
+		if refuse {
+			t.Error("Block refused a preload")
+		}
+		got <- reason
+	})
+	reason := <-got
+	var re *ReserveError
+	if !errors.As(reason, &re) || !strings.HasPrefix(reason.Error(), "preload held, onBlocked: refuse does not apply to preloads") {
+		t.Fatalf("preload reason %v, want a held ReserveError with the preload-held prefix", reason)
+	}
+}
+
 func TestTenants_PreloadReturnsWhenHeld(t *testing.T) {
 	for _, refuse := range []bool{false, true} {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -82,9 +108,9 @@ func TestTenants_PreloadReturnsWhenHeld(t *testing.T) {
 			defer close(returned)
 			Preload(ctx, func(ctx context.Context) {
 				defer close(exited)
-				_, gotRefuse = HoldPreload(ctx, errors.New("tenant hi wants the GPU"), refuse)
+				_, gotRefuse = holdPreload(ctx, errors.New("tenant hi wants the GPU"), refuse)
 				// A second block of the same queued preload must not panic.
-				HoldPreload(ctx, errors.New("tenant hi wants the GPU"), refuse)
+				holdPreload(ctx, errors.New("tenant hi wants the GPU"), refuse)
 				<-ctx.Done()
 			})
 		}()
@@ -100,7 +126,7 @@ func TestTenants_PreloadReturnsWhenHeld(t *testing.T) {
 			t.Fatalf("refuse=%v: held send did not exit after ctx was cancelled", refuse)
 		}
 		if gotRefuse {
-			t.Fatalf("refuse=%v: HoldPreload refused a preload", refuse)
+			t.Fatalf("refuse=%v: holdPreload refused a preload", refuse)
 		}
 	}
 }

@@ -65,7 +65,7 @@ func TestTenants_ConditionErrorKeepsClaim(t *testing.T) {
 		mode.Store(failure)
 		start := hiCondition(m).Errors
 		eventually(t, failure+" probes to fail", func() bool { return hiCondition(m).Errors >= start+3 })
-		if reason, _ := m.Block("lo-model", nil); reason == nil {
+		if reason, _ := m.Block(t.Context(), "lo-model", nil); reason == nil {
 			t.Fatalf("%s condition probe lifted the block on lo", failure)
 		}
 		cond := hiCondition(m)
@@ -81,7 +81,7 @@ func TestTenants_ConditionErrorKeepsClaim(t *testing.T) {
 	}
 
 	mode.Store("off")
-	eventually(t, "lo to be released", func() bool { reason, _ := m.Block("lo-model", nil); return reason == nil })
+	eventually(t, "lo to be released", func() bool { reason, _ := m.Block(t.Context(), "lo-model", nil); return reason == nil })
 	if cond := hiCondition(m); cond.Errors != 0 || cond.LastError == "" {
 		t.Fatalf("after recovery: errors=%d lastError=%q, want 0 and the last failure kept", cond.Errors, cond.LastError)
 	}
@@ -129,7 +129,7 @@ func TestTenants_ConditionErrorBeforeFirstReading(t *testing.T) {
 	startFast(t, m)
 	eventually(t, "probes to fail", func() bool { return hiCondition(m).Errors >= 3 })
 
-	if reason, _ := m.Block("lo-model", nil); reason != nil {
+	if reason, _ := m.Block(t.Context(), "lo-model", nil); reason != nil {
 		t.Fatalf("a failing first probe claimed the GPU: %v", reason)
 	}
 	if cond := hiCondition(m); cond.Result != nil || cond.ProbedAt != nil {
@@ -140,5 +140,5 @@ func TestTenants_ConditionErrorBeforeFirstReading(t *testing.T) {
 	}
 
 	mode.Store("on")
-	eventually(t, "hi to want the GPU", func() bool { reason, _ := m.Block("lo-model", nil); return reason != nil })
+	eventually(t, "hi to want the GPU", func() bool { reason, _ := m.Block(t.Context(), "lo-model", nil); return reason != nil })
 }

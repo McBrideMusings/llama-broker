@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
 	"github.com/mostlygeek/llama-swap/internal/tenants"
 )
@@ -67,13 +70,19 @@ func TestTenants_PreloadMarksRequestContext(t *testing.T) {
 		t.Fatalf("request context data = %+v, want ModelID m1", data)
 	}
 
-	// The mark is unexported; HoldPreload only rewrites a refusal on a marked ctx.
-	blocked := errors.New("tenant hi wants the GPU")
-	reason, refuse := tenants.HoldPreload(got, blocked, true)
+	// The mark is unexported; the gate holds, rather than refuses, only a
+	// marked ctx. small-model cuts into the VRAM reserve with big-model loaded.
+	gate := tenants.New(map[string]config.TenantConfig{
+		"big":   {Members: []string{"big-model"}, Priority: 1, VRAM: 6000, Interval: 1, OnBlocked: config.TenantOnBlockedRefuse},
+		"small": {Members: []string{"small-model"}, Priority: 1, VRAM: 1000, Interval: 1, OnBlocked: config.TenantOnBlockedRefuse},
+	}, logmon.NewWriter(io.Discard))
+	gate.SetVRAM(8000, 2000)
+	reason, refuse := gate.Block(got, "small-model", []string{"big-model"})
 	if refuse {
-		t.Fatal("preload request context is not marked: HoldPreload kept refuse=true")
+		t.Fatal("preload request context is not marked: the gate refused it")
 	}
-	if !errors.Is(reason, blocked) {
-		t.Fatalf("HoldPreload reason = %v, want it to wrap %v", reason, blocked)
+	var re *tenants.ReserveError
+	if !errors.As(reason, &re) {
+		t.Fatalf("gate reason = %v, want a held ReserveError", reason)
 	}
 }

@@ -3,13 +3,10 @@ package scheduler
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/mostlygeek/llama-swap/internal/process"
-	"github.com/mostlygeek/llama-swap/internal/tenants"
 )
 
 // gatedEffects is fakeEffects plus a programmable TenantGate.
@@ -17,12 +14,14 @@ type gatedEffects struct {
 	*fakeEffects
 	blocked   map[string]error
 	refuse    map[string]bool
-	records   []string            // "hold lo", "refuse lo"
-	alongside map[string][]string // last alongside set per model
+	records   []string                   // "hold lo", "refuse lo"
+	alongside map[string][]string        // last alongside set per model
+	ctx       map[string]context.Context // last request context per model
 }
 
-func (g *gatedEffects) TenantBlock(model string, alongside []string) (error, bool) {
+func (g *gatedEffects) TenantBlock(ctx context.Context, model string, alongside []string) (error, bool) {
 	g.alongside[model] = alongside
+	g.ctx[model] = ctx
 	return g.blocked[model], g.refuse[model]
 }
 
@@ -36,8 +35,10 @@ func (g *gatedEffects) TenantRecord(model string, reason error, refuse bool) {
 
 func newGatedEffects() *gatedEffects {
 	return &gatedEffects{fakeEffects: newFakeEffects(), blocked: map[string]error{}, refuse: map[string]bool{},
-		alongside: map[string][]string{}}
+		alongside: map[string][]string{}, ctx: map[string]context.Context{}}
 }
+
+type ctxKey struct{}
 
 func TestTenants_FIFOGateSeesWhatStaysLoaded(t *testing.T) {
 	eff := newGatedEffects()
@@ -46,9 +47,14 @@ func TestTenants_FIFOGateSeesWhatStaysLoaded(t *testing.T) {
 	eff.states["c"] = process.StateStopped
 	s := newFIFO(&stubPlanner{evict: map[string][]string{"c": {"a"}}}, eff)
 
-	s.OnRequest(reqCh("c"))
+	r := reqCh("c")
+	r.Ctx = context.WithValue(r.Ctx, ctxKey{}, "c's request")
+	s.OnRequest(r)
 	if got := eff.alongside["c"]; len(got) != 1 || got[0] != "b" {
 		t.Fatalf("alongside c = %v, want [b]: a is evicted by c's swap", got)
+	}
+	if got := eff.ctx["c"]; got == nil || got.Value(ctxKey{}) != "c's request" {
+		t.Fatalf("gate got ctx %v, want the request's own context", got)
 	}
 }
 
@@ -105,83 +111,27 @@ func TestTenants_FIFORefusesWithReason(t *testing.T) {
 	}
 }
 
-func TestTenants_FIFOHoldsRefusedPreloadUntilTenantsChange(t *testing.T) {
+func TestTenants_FIFOHeldModelDoesNotDelayLaterRequests(t *testing.T) {
 	eff := newGatedEffects()
+	eff.states["a"] = process.StateReady
 	eff.states["lo"] = process.StateReady
-	reason := errors.New("tenant hi wants the GPU")
-	eff.blocked["lo"] = reason
-	eff.refuse["lo"] = true
+	eff.states["hi"] = process.StateReady
+	eff.blocked["lo"] = errors.New("tenant hi wants the GPU")
 	s := newFIFO(&stubPlanner{}, eff)
 
-	r := reqCh("lo")
-	r.Ctx = tenants.WithPreload(r.Ctx)
-	s.OnRequest(r)
-	assertAdmitted(t, r)
-	if len(s.queued) != 1 {
-		t.Fatalf("queued=%d want 1: a refused preload is held", len(s.queued))
+	// The order startPreload sends hooks.on_startup.preload in.
+	for _, model := range []string{"a", "lo", "hi"} {
+		s.OnRequest(reqCh(model))
 	}
-
-	// A wake while still refusing keeps the preload held, not failed.
-	s.OnTenantsChanged()
-	if eff.errored("lo") != 0 || len(s.queued) != 1 {
-		t.Fatalf("after wake while blocked: errored=%d queued=%d, want 0 and 1", eff.errored("lo"), len(s.queued))
+	var served []string
+	for _, g := range eff.grants {
+		served = append(served, g.model)
 	}
-	if got, want := strings.Join(eff.records, ","), "hold lo"; got != want {
-		t.Fatalf("records %q want %q", got, want)
+	if got, want := strings.Join(served, ","), "a,hi"; got != want {
+		t.Fatalf("served %q want %q: hi must not wait on held lo", got, want)
 	}
-
-	delete(eff.blocked, "lo")
-	s.OnTenantsChanged()
-	if got := eff.served("lo"); got != 1 {
-		t.Fatalf("served lo %d times after the gate opened, want 1", got)
-	}
-}
-
-func TestTenants_HeldPreloadDoesNotDelayLaterPreloads(t *testing.T) {
-	for _, refuse := range []bool{false, true} {
-		t.Run(fmt.Sprintf("refuse=%v", refuse), func(t *testing.T) {
-			eff := newGatedEffects()
-			eff.states["a"] = process.StateReady
-			eff.states["lo"] = process.StateReady
-			eff.states["hi"] = process.StateReady
-			eff.blocked["lo"] = errors.New("tenant hi wants the GPU")
-			eff.refuse["lo"] = refuse
-			s := newFIFO(&stubPlanner{}, eff)
-
-			// mu stands in for the run loop that serializes scheduler calls.
-			var mu sync.Mutex
-			stop, cancel := context.WithCancel(context.Background())
-			defer cancel()
-
-			// Send [a, lo, hi] the way startPreload does: each send returns
-			// once served, or waits forever while queued.
-			for _, model := range []string{"a", "lo", "hi"} {
-				tenants.Preload(stop, func(ctx context.Context) {
-					mu.Lock()
-					r := reqCh(model)
-					r.Ctx = ctx
-					s.OnRequest(r)
-					served := eff.served(model) > 0
-					mu.Unlock()
-					if !served {
-						<-stop.Done()
-					}
-				})
-			}
-
-			mu.Lock()
-			defer mu.Unlock()
-			var served []string
-			for _, g := range eff.grants {
-				served = append(served, g.model)
-			}
-			if got, want := strings.Join(served, ","), "a,hi"; got != want {
-				t.Fatalf("served %q want %q: hi must not wait on held lo", got, want)
-			}
-			if len(s.queued) != 1 || s.queued[0].Model != "lo" {
-				t.Fatalf("queued=%v want [lo]", s.queued)
-			}
-		})
+	if len(s.queued) != 1 || s.queued[0].Model != "lo" {
+		t.Fatalf("queued=%v want [lo]", s.queued)
 	}
 }
 

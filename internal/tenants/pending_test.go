@@ -32,7 +32,7 @@ func TestTenants_LowerTenantHeldUntilHigherConditionProbed(t *testing.T) {
 	r := &fakeRouter{running: map[string]process.ProcessState{}}
 	m.Start(t.Context(), r)
 
-	reason, refuse := m.Block("lo-model", nil)
+	reason, refuse := m.Block(t.Context(), "lo-model", nil)
 	var pending *PendingError
 	if !errors.As(reason, &pending) || !refuse {
 		t.Fatalf("lo Block before hi's first probe = %v, refuse %v; want a PendingError, refused", reason, refuse)
@@ -40,7 +40,7 @@ func TestTenants_LowerTenantHeldUntilHigherConditionProbed(t *testing.T) {
 	if pending.StatusCode() != http.StatusServiceUnavailable || pending.Header().Get("Retry-After") != "1" {
 		t.Fatalf("pending error is %d with Retry-After %q, want 503 and 1", pending.StatusCode(), pending.Header().Get("Retry-After"))
 	}
-	if blocked, _ := m.Block("hi-model", nil); blocked != nil {
+	if blocked, _ := m.Block(t.Context(), "hi-model", nil); blocked != nil {
 		t.Fatalf("hi blocked by its own pending condition: %v", blocked)
 	}
 	m.Record("lo-model", reason, refuse)
@@ -50,7 +50,7 @@ func TestTenants_LowerTenantHeldUntilHigherConditionProbed(t *testing.T) {
 	}
 
 	close(answer)
-	eventually(t, "hi's first reading to release lo", func() bool { reason, _ := m.Block("lo-model", nil); return reason == nil })
+	eventually(t, "hi's first reading to release lo", func() bool { reason, _ := m.Block(t.Context(), "lo-model", nil); return reason == nil })
 	if _, wakes := r.snapshot(); wakes < 1 {
 		t.Fatalf("wakes=%d after the first reading, want >= 1", wakes)
 	}
@@ -74,14 +74,14 @@ func TestTenants_FailedFirstProbeReleasesLowerTenant(t *testing.T) {
 	r := &fakeRouter{running: map[string]process.ProcessState{}}
 	m.Start(t.Context(), r)
 
-	reason, refuse := m.Block("lo-model", nil)
+	reason, refuse := m.Block(t.Context(), "lo-model", nil)
 	var pending *PendingError
 	if !errors.As(reason, &pending) || refuse {
 		t.Fatalf("lo Block before hi's first probe = %v, refuse %v; want a PendingError, held", reason, refuse)
 	}
 
 	close(answer)
-	eventually(t, "hi's failed first probe to release lo", func() bool { reason, _ := m.Block("lo-model", nil); return reason == nil })
+	eventually(t, "hi's failed first probe to release lo", func() bool { reason, _ := m.Block(t.Context(), "lo-model", nil); return reason == nil })
 	if wantsGPU(m, "hi") {
 		t.Fatal("a failed first probe claimed the GPU")
 	}

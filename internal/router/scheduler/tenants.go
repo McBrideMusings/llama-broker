@@ -1,9 +1,8 @@
 package scheduler
 
 import (
+	"context"
 	"slices"
-
-	"github.com/mostlygeek/llama-swap/internal/tenants"
 )
 
 // TenantGate is the tenant admission check (internal/tenants). Effects
@@ -12,8 +11,9 @@ import (
 type TenantGate interface {
 	// TenantBlock reports why model may not load now, or nil when it may.
 	// refuse says to fail the request with the reason instead of holding it
-	// in the queue. alongside is the models that stay loaded if model loads.
-	TenantBlock(model string, alongside []string) (reason error, refuse bool)
+	// in the queue. ctx is the request's context. alongside is the models
+	// that stay loaded if model loads.
+	TenantBlock(ctx context.Context, model string, alongside []string) (reason error, refuse bool)
 	// TenantRecord logs that a request for model was held (refuse false)
 	// or refused because of reason.
 	TenantRecord(model string, reason error, refuse bool)
@@ -21,8 +21,7 @@ type TenantGate interface {
 
 // tenantBlock asks the gate about req's model; without a gate nothing is
 // blocked. The gate is told what stays loaded alongside the model: running
-// processes and in-flight swap targets, less what its own swap would evict. A
-// preload is held where the gate says refuse.
+// processes and in-flight swap targets, less what its own swap would evict.
 func (s *FIFO) tenantBlock(req HandlerReq) (error, bool) {
 	if s.gate == nil {
 		return nil, false
@@ -30,8 +29,7 @@ func (s *FIFO) tenantBlock(req HandlerReq) (error, bool) {
 	running := s.runningSet(req.Model)
 	evict := s.planner.EvictionFor(req.Model, running)
 	alongside := slices.DeleteFunc(running, func(id string) bool { return slices.Contains(evict, id) })
-	reason, refuse := s.gate.TenantBlock(req.Model, alongside)
-	return tenants.HoldPreload(req.Ctx, reason, refuse)
+	return s.gate.TenantBlock(req.Ctx, req.Model, alongside)
 }
 
 // OnTenantsChanged re-runs the queue after a tenant's condition changed or a

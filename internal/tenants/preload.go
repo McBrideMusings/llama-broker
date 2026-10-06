@@ -30,10 +30,10 @@ func preloadOf(ctx context.Context) *preloadMark {
 	return m
 }
 
-// HoldPreload turns a refusal of a preload into a hold whose reason says why,
+// holdPreload turns a refusal of a preload into a hold whose reason says why,
 // and returns every other gate answer unchanged. Any block of a preload also
 // releases its sender waiting in Preload.
-func HoldPreload(ctx context.Context, reason error, refuse bool) (error, bool) {
+func holdPreload(ctx context.Context, reason error, refuse bool) (error, bool) {
 	m := preloadOf(ctx)
 	if reason == nil || m == nil {
 		return reason, refuse

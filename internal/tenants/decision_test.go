@@ -46,9 +46,9 @@ func TestTenants_DecisionsLoggedAndEmitted(t *testing.T) {
 	m.Start(t.Context(), r)
 
 	eventually(t, "stop decision", func() bool { return decided(ActionStop) })
-	reason, refuse := m.Block("lo-model", nil)
+	reason, refuse := m.Block(t.Context(), "lo-model", nil)
 	m.Record("lo-model", reason, refuse)
-	eventually(t, "hi-model admitted", func() bool { r, _ := m.Block("hi-model", nil); return r == nil })
+	eventually(t, "hi-model admitted", func() bool { r, _ := m.Block(t.Context(), "hi-model", nil); return r == nil })
 	event.Emit(swaputil.ProcessStateChangeEvent{ProcessName: "hi-model", OldState: "stopped", NewState: "starting"})
 	eventually(t, "hold and load decisions", func() bool { return decided(ActionHold) && decided(ActionLoad) })
 
@@ -82,7 +82,7 @@ func TestTenants_LoadDecisionTakesReadingAtGatePass(t *testing.T) {
 	// turns true before their start events arrive. lo-model passes only once
 	// hi's first probe has finished, so it goes first.
 	for _, model := range []string{"lo-model", "hi-model"} {
-		eventually(t, model+" admitted", func() bool { r, _ := m.Block(model, nil); return r == nil })
+		eventually(t, model+" admitted", func() bool { r, _ := m.Block(t.Context(), model, nil); return r == nil })
 	}
 	on.Store(true)
 	eventually(t, "hi to want the GPU", func() bool { return wantsGPU(m, "hi") })

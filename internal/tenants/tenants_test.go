@@ -116,11 +116,11 @@ func TestTenants_LowerTenantHeldOrRefusedWhileHigherWantsGPU(t *testing.T) {
 			r := &fakeRouter{running: map[string]process.ProcessState{}}
 			m.Start(t.Context(), r)
 
-			eventually(t, "hi's first reading to release lo", func() bool { reason, _ := m.Block("lo-model", nil); return reason == nil })
+			eventually(t, "hi's first reading to release lo", func() bool { reason, _ := m.Block(t.Context(), "lo-model", nil); return reason == nil })
 
 			on.Store(true)
-			eventually(t, "hi to want the GPU", func() bool { reason, _ := m.Block("lo-model", nil); return reason != nil })
-			reason, refuse := m.Block("lo-model", nil)
+			eventually(t, "hi to want the GPU", func() bool { reason, _ := m.Block(t.Context(), "lo-model", nil); return reason != nil })
+			reason, refuse := m.Block(t.Context(), "lo-model", nil)
 			if refuse != (onBlocked == config.TenantOnBlockedRefuse) {
 				t.Fatalf("refuse=%v for onBlocked=%s", refuse, onBlocked)
 			}
@@ -131,15 +131,15 @@ func TestTenants_LowerTenantHeldOrRefusedWhileHigherWantsGPU(t *testing.T) {
 			if !strings.Contains(reason.Error(), "tenant hi (priority 10)") {
 				t.Fatalf("reason %q does not name the blocking tenant", reason)
 			}
-			if blocked, _ := m.Block("hi-model", nil); blocked != nil {
+			if blocked, _ := m.Block(t.Context(), "hi-model", nil); blocked != nil {
 				t.Fatalf("hi blocked by its own condition: %v", blocked)
 			}
-			if blocked, _ := m.Block("untenanted", nil); blocked != nil {
+			if blocked, _ := m.Block(t.Context(), "untenanted", nil); blocked != nil {
 				t.Fatalf("untenanted model blocked: %v", blocked)
 			}
 
 			on.Store(false)
-			eventually(t, "lo to be released", func() bool { reason, _ := m.Block("lo-model", nil); return reason == nil })
+			eventually(t, "lo to be released", func() bool { reason, _ := m.Block(t.Context(), "lo-model", nil); return reason == nil })
 			if _, wakes := r.snapshot(); wakes < 2 {
 				t.Fatalf("wakes=%d want >= 2 (one per condition change)", wakes)
 			}
@@ -160,7 +160,7 @@ func TestTenants_HigherWantsGPUStopsRunningLowerTenantFirst(t *testing.T) {
 	if len(stopped[0]) != 1 || stopped[0][0] != "lo-model" {
 		t.Fatalf("stopped %v want [[lo-model]]", stopped)
 	}
-	if blocked, _ := m.Block("hi-model", nil); blocked != nil {
+	if blocked, _ := m.Block(t.Context(), "hi-model", nil); blocked != nil {
 		t.Fatalf("hi still blocked after lo stopped: %v", blocked)
 	}
 }
@@ -173,11 +173,11 @@ func TestTenants_HigherTenantWaitsForLowerToStop(t *testing.T) {
 	m.byModel["hi-model"].wants = true
 	m.mu.Unlock()
 
-	if blocked, refuse := m.Block("hi-model", nil); blocked == nil || refuse {
+	if blocked, refuse := m.Block(t.Context(), "hi-model", nil); blocked == nil || refuse {
 		t.Fatalf("hi-model Block = %v, refuse %v; want held while lo-model runs", blocked, refuse)
 	}
 	r.StopModels("lo-model")
-	if blocked, _ := m.Block("hi-model", nil); blocked != nil {
+	if blocked, _ := m.Block(t.Context(), "hi-model", nil); blocked != nil {
 		t.Fatalf("hi-model still blocked after lo-model stopped: %v", blocked)
 	}
 }
