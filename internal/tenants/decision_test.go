@@ -48,6 +48,7 @@ func TestTenants_DecisionsLoggedAndEmitted(t *testing.T) {
 	eventually(t, "stop decision", func() bool { return decided(ActionStop) })
 	reason, refuse := m.Block("lo-model", nil)
 	m.Record("lo-model", reason, refuse)
+	eventually(t, "hi-model admitted", func() bool { r, _ := m.Block("hi-model", nil); return r == nil })
 	event.Emit(swaputil.ProcessStateChangeEvent{ProcessName: "hi-model", OldState: "stopped", NewState: "starting"})
 	eventually(t, "hold and load decisions", func() bool { return decided(ActionHold) && decided(ActionLoad) })
 
@@ -68,6 +69,38 @@ func TestTenants_DecisionsLoggedAndEmitted(t *testing.T) {
 			t.Errorf("event decision missing time, tenant or reason: %+v", d)
 		}
 	}
+}
+
+func TestTenants_LoadDecisionTakesReadingAtGatePass(t *testing.T) {
+	var on atomic.Bool
+	srv := switchServer(t, &on)
+	log := logmon.NewWriter(io.Discard)
+	m := New(twoTenants(srv.URL, config.TenantOnBlockedHold), log)
+	m.Start(t.Context(), &fakeRouter{running: map[string]process.ProcessState{}})
+
+	// Both models pass the gate while hi's condition reads false, then hi
+	// turns true before their start events arrive. lo-model passes only once
+	// hi's first probe has finished, so it goes first.
+	for _, model := range []string{"lo-model", "hi-model"} {
+		eventually(t, model+" admitted", func() bool { r, _ := m.Block(model, nil); return r == nil })
+	}
+	on.Store(true)
+	eventually(t, "hi to want the GPU", func() bool { return wantsGPU(m, "hi") })
+	for _, model := range []string{"hi-model", "lo-model"} {
+		event.Emit(swaputil.ProcessStateChangeEvent{ProcessName: model, OldState: "stopped", NewState: "starting"})
+	}
+	logged := func(line string) func() bool {
+		return func() bool { return strings.Contains(string(log.GetHistory()), line) }
+	}
+	eventually(t, "hi load at its gate-pass reading", logged(
+		`tenant=hi model=hi-model action=load probe="condition of hi: false (HTTP 200, on=false)" reason="no higher-priority tenant wants the GPU"`))
+	eventually(t, "lo load with the gate-pass reason", logged(
+		`tenant=lo model=lo-model action=load probe="condition of lo: none configured" reason="no higher-priority tenant wants the GPU"`))
+
+	// The pass is spent on the start it admitted.
+	event.Emit(swaputil.ProcessStateChangeEvent{ProcessName: "lo-model", OldState: "stopped", NewState: "starting"})
+	eventually(t, "start without a gate pass", logged(
+		`tenant=lo model=lo-model action=load probe="" reason="started without passing the tenant gate"`))
 }
 
 func TestTenants_StatusReportsProbesLoadedAndHeld(t *testing.T) {

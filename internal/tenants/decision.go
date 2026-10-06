@@ -126,7 +126,8 @@ func (t *tenant) conditionLocked() string {
 }
 
 // recordLoads logs a load decision whenever a tenant's model starts, until ctx
-// is cancelled.
+// is cancelled. The decision carries the reading from the gate pass that
+// admitted the load, not one taken when the start event arrives.
 func (m *Manager) recordLoads(ctx context.Context) {
 	cancel := event.On(func(e swaputil.ProcessStateChangeEvent) {
 		if e.NewState == string(process.StateStopped) {
@@ -147,17 +148,17 @@ func (m *Manager) recordLoads(ctx context.Context) {
 			return
 		}
 		m.mu.Lock()
-		probe := t.conditionLocked()
-		reason := "no higher-priority tenant wants the GPU"
-		// Either branch means the gate admitted the load before h's condition
-		// turned true.
-		if h := m.blockerLocked(t); h != nil {
-			reason = fmt.Sprintf("loading although tenant %s (priority %d) wants the GPU", h.name, h.cfg.Priority)
-		} else if h := m.pendingLocked(t); h != nil {
-			reason = fmt.Sprintf("loading although the condition of tenant %s (priority %d) has not been probed yet", h.name, h.cfg.Priority)
-		}
+		probe, ok := m.admitted[e.ProcessName]
+		delete(m.admitted, e.ProcessName)
 		m.mu.Unlock()
-		m.record(Decision{Tenant: t.name, Model: e.ProcessName, Action: ActionLoad, Probe: probe, Reason: reason})
+		d := Decision{Tenant: t.name, Model: e.ProcessName, Action: ActionLoad, Probe: probe}
+		if !ok {
+			d.Reason = "started without passing the tenant gate"
+			m.recordAt(m.log.Warnf, d)
+			return
+		}
+		d.Reason = "no higher-priority tenant wants the GPU"
+		m.record(d)
 	})
 	go func() {
 		<-ctx.Done()

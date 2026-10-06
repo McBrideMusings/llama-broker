@@ -71,6 +71,13 @@ type Manager struct {
 	mu     sync.Mutex
 	router Router
 	vram   vram // set by SetVRAM; see reserve.go
+	// admitted maps a model to its tenant's condition reading when the gate
+	// last admitted it. The load decision logs that reading: a process starts
+	// only in a swap, which the scheduler starts on the same run-loop turn as
+	// a gate pass, but the start event reaches recordLoads later. Passes that
+	// start nothing (fast path, held counts) only leave a reading that the
+	// next swap's pass replaces. Guarded by mu.
+	admitted map[string]string
 }
 
 // New builds a Manager from validated tenant configs. It returns nil when there
@@ -79,7 +86,7 @@ func New(cfgs map[string]config.TenantConfig, log *logmon.Monitor) *Manager {
 	if len(cfgs) == 0 {
 		return nil
 	}
-	m := &Manager{log: log, byModel: make(map[string]*tenant)}
+	m := &Manager{log: log, byModel: make(map[string]*tenant), admitted: make(map[string]string)}
 	for name, cfg := range cfgs {
 		t := &tenant{name: name, cfg: cfg, interval: time.Duration(cfg.Interval) * time.Second}
 		m.tenants = append(m.tenants, t)
@@ -120,6 +127,9 @@ func (m *Manager) Start(ctx context.Context, r Router) {
 // condition whose first probe has not finished, and also when
 // its own tenant wants the GPU but a lower tenant still has a process running:
 // the higher tenant loads only after the lower one has drained and stopped.
+//
+// A pass also records the tenant's condition reading for model; the load
+// decision for model's next start logs it.
 // With a VRAM reserve it is also blocked while the needs of the tenants running
 // alongside it, its own and the reserve exceed the card total. alongside is the
 // models that stay loaded if model loads: running ones and in-flight swap
@@ -159,6 +169,7 @@ func (m *Manager) Block(model string, alongside []string) (reason error, refuse 
 	if err := m.reserveBlockLocked(t, model, alongside); err != nil {
 		return err, t.cfg.OnBlocked == config.TenantOnBlockedRefuse
 	}
+	m.admitted[model] = t.conditionLocked()
 	return nil, false
 }
 
