@@ -221,8 +221,10 @@ func TestProcessCommand_StopHonorsGracefulTimeout(t *testing.T) {
 
 	runErr := runAsync(t, p)
 
-	// Wait until the trap is installed before stopping.
-	trapDeadline := time.Now().Add(2 * time.Second)
+	// Wait until the trap is installed before stopping. The deadline only
+	// bounds a failure: bash can take seconds to start under a full parallel
+	// test run.
+	trapDeadline := time.Now().Add(10 * time.Second)
 	for {
 		if _, err := os.Stat(ready); err == nil {
 			break

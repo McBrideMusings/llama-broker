@@ -83,18 +83,19 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, skipHistory := r.URL.Query()["no-history"]
-	if !skipHistory {
-		if history := logger.GetHistory(); len(history) != 0 {
-			w.Write(history)
-			flusher.Flush()
-		}
+	// Subscribe holds live delivery for every subscriber while history runs,
+	// so take the history here and write it to the client afterwards; live
+	// lines wait in sendChan until it is out.
+	var history []byte
+	var onHistory func([]byte)
+	if _, skipHistory := r.URL.Query()["no-history"]; !skipHistory {
+		onHistory = func(data []byte) { history = data }
 	}
 
 	sendChan := make(chan []byte, 10)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	cancelSub := logger.OnLogData(func(data []byte) {
+	cancelSub := logger.Subscribe(onHistory, func(data []byte) {
 		select {
 		case sendChan <- data:
 		case <-ctx.Done():
@@ -102,6 +103,11 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	defer cancelSub()
+
+	if len(history) != 0 {
+		w.Write(history)
+		flusher.Flush()
+	}
 
 	for {
 		select {

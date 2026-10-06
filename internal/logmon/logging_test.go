@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/mostlygeek/llama-swap/internal/event"
 )
 
 func TestLogMonitor(t *testing.T) {
@@ -17,12 +19,12 @@ func TestLogMonitor(t *testing.T) {
 	client1Messages := make([]byte, 0)
 	client2Messages := make([]byte, 0)
 
-	defer logMonitor.OnLogData(func(data []byte) {
+	defer logMonitor.Subscribe(nil, func(data []byte) {
 		client1Messages = append(client1Messages, data...)
 		wg.Done()
 	})()
 
-	defer logMonitor.OnLogData(func(data []byte) {
+	defer logMonitor.Subscribe(nil, func(data []byte) {
 		client2Messages = append(client2Messages, data...)
 		wg.Done()
 	})()
@@ -197,6 +199,132 @@ func TestLogMonitor_ClearAndReuse(t *testing.T) {
 	}
 }
 
+// TestLogMonitor_SubscribeDeliversEachLineOnce covers a line written before
+// Subscribe whose broadcast arrives after it: the line belongs to history
+// only, never to the live stream too.
+func TestLogMonitor_SubscribeDeliversEachLineOnce(t *testing.T) {
+	for _, tc := range []struct {
+		withHistory bool
+		want        string
+	}{
+		{withHistory: false, want: "LIVE\n"},
+		{withHistory: true, want: "HIST\nLIVE\n"},
+	} {
+		// Build the monitor without its broadcast goroutine so HIST is still
+		// waiting to be broadcast when Subscribe runs.
+		lm := &Monitor{
+			eventbus:    event.NewDispatcherConfig(1000),
+			stdout:      io.Discard,
+			broadcastCh: make(chan DataEvent, 1024),
+			level:       LevelInfo,
+		}
+		lm.Write([]byte("HIST\n"))
+
+		var mu sync.Mutex
+		var got []byte
+		record := func(data []byte) {
+			mu.Lock()
+			got = append(got, data...)
+			mu.Unlock()
+		}
+		var history func([]byte)
+		if tc.withHistory {
+			history = record
+		}
+		live := make(chan struct{})
+		cancel := lm.Subscribe(history, func(data []byte) {
+			record(data)
+			if string(data) == "LIVE\n" {
+				close(live)
+			}
+		})
+
+		go lm.broadcastLoop()
+		lm.Write([]byte("LIVE\n"))
+
+		select {
+		case <-live:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("withHistory=%v: live line never arrived", tc.withHistory)
+		}
+		cancel()
+		close(lm.broadcastCh)
+
+		mu.Lock()
+		if string(got) != tc.want {
+			t.Errorf("withHistory=%v: got %q, want %q", tc.withHistory, got, tc.want)
+		}
+		mu.Unlock()
+	}
+}
+
+// TestLogMonitor_SubscribeDroppedNotice covers the dropped-bytes notice: a
+// subscriber whose history holds the dropped line skips it, and one that
+// subscribed before the drop receives it.
+func TestLogMonitor_SubscribeDroppedNotice(t *testing.T) {
+	// A one-slot hand-off with no broadcast goroutine yet: A fills the slot,
+	// B is dropped.
+	lm := &Monitor{
+		eventbus:    event.NewDispatcherConfig(1000),
+		stdout:      io.Discard,
+		broadcastCh: make(chan DataEvent, 1),
+		level:       LevelInfo,
+	}
+
+	type recorder struct {
+		mu  sync.Mutex
+		got []byte
+		a   chan struct{}
+		c   chan struct{}
+	}
+	subscribe := func() *recorder {
+		r := &recorder{a: make(chan struct{}), c: make(chan struct{})}
+		cancel := lm.Subscribe(nil, func(data []byte) {
+			r.mu.Lock()
+			r.got = append(r.got, data...)
+			r.mu.Unlock()
+			switch string(data) {
+			case "A\n":
+				close(r.a)
+			case "C\n":
+				close(r.c)
+			}
+		})
+		t.Cleanup(cancel)
+		return r
+	}
+	wait := func(ch chan struct{}, what string) {
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s never arrived", what)
+		}
+	}
+
+	before := subscribe()
+	lm.Write([]byte("A\n"))
+	lm.Write([]byte("B\n"))
+	after := subscribe()
+
+	go lm.broadcastLoop()
+	wait(before.a, "A")
+	lm.Write([]byte("C\n"))
+	wait(before.c, "C at the early subscriber")
+	wait(after.c, "C at the late subscriber")
+	close(lm.broadcastCh)
+
+	before.mu.Lock()
+	if want := "\n— 2 bytes dropped —\nA\nC\n"; string(before.got) != want {
+		t.Errorf("early subscriber: got %q, want %q", before.got, want)
+	}
+	before.mu.Unlock()
+	after.mu.Lock()
+	if want := "C\n"; string(after.got) != want {
+		t.Errorf("late subscriber: got %q, want %q", after.got, want)
+	}
+	after.mu.Unlock()
+}
+
 // TestLogMonitor_DropsWhenSubscriberBlocked verifies that a stalled subscriber
 // can never block Write (the upstream process's stdout drain) and that dropped
 // data is reported in-stream with a marker once delivery resumes. See #875.
@@ -208,7 +336,7 @@ func TestLogMonitor_DropsWhenSubscriberBlocked(t *testing.T) {
 	var mu sync.Mutex
 	var received [][]byte
 
-	cancel := lm.OnLogData(func(data []byte) {
+	cancel := lm.Subscribe(nil, func(data []byte) {
 		// Block the first delivery, stalling the broadcaster goroutine so the
 		// hand-off channel and event queue fill and subsequent writes drop.
 		once.Do(func() { <-release })
@@ -290,7 +418,7 @@ func BenchmarkLogMonitorWrite(b *testing.B) {
 	b.Run("WithSubscribers", func(b *testing.B) {
 		lm := NewWriter(io.Discard)
 		for i := 0; i < 5; i++ {
-			lm.OnLogData(func(data []byte) {})
+			lm.Subscribe(nil, func(data []byte) {})
 		}
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {

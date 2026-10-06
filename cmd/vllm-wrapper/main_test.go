@@ -106,16 +106,25 @@ func TestStartDaemonArgv(t *testing.T) {
 	tmpDir := t.TempDir()
 	argvFile := filepath.Join(tmpDir, "argv.txt")
 
+	// Write to a temp file and rename so argv.txt appears complete or not at all.
 	script := filepath.Join(tmpDir, "write-argv.sh")
 	if err := os.WriteFile(script, []byte(
-		"#!/bin/bash\nprintf '%s\n' \"$@\" > \""+argvFile+"\"\nexit 0\n",
+		"#!/bin/bash\nprintf '%s\n' \"$@\" > \""+argvFile+".tmp\"\nmv \""+argvFile+".tmp\" \""+argvFile+"\"\nexit 0\n",
 	), 0755); err != nil {
 		t.Fatalf("write helper script: %v", err)
 	}
 
-	err := startDaemon([]string{script, "arg1", "arg2", "arg3"}, "http://127.0.0.1:12345/health", "/health", 100*time.Millisecond)
-	if err == nil {
-		t.Fatal("expected error (health check fails)")
+	// Report healthy once the script has written argv.txt, so startDaemon
+	// waits for the script instead of killing it at a fixed timeout.
+	health := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := os.Stat(argvFile); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	defer health.Close()
+
+	if err := startDaemon([]string{script, "arg1", "arg2", "arg3"}, health.URL, "/health", 30*time.Second); err != nil {
+		t.Fatalf("startDaemon: %v", err)
 	}
 
 	content, err := os.ReadFile(argvFile)

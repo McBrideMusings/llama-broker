@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,9 @@ const DataEventID = 0x04
 
 type DataEvent struct {
 	Data []byte
+	// Seq is the sequence number of the Write that produced Data. Subscribe
+	// uses it to tell lines already in a history snapshot from new ones.
+	Seq uint64
 }
 
 func (e DataEvent) Type() uint32 {
@@ -105,14 +109,19 @@ type Monitor struct {
 	mu       sync.RWMutex
 	buffer   *circularBuffer
 	bufferMu sync.RWMutex
+	// seq counts Writes. It is guarded by bufferMu so a history snapshot and
+	// the sequence number of its last line are read together.
+	seq uint64
 
 	stdout io.Writer
 
 	// broadcastCh hands log data to a dedicated goroutine that owns the
 	// (backpressuring) event bus. Write performs a non-blocking send so that
 	// slow subscribers can never stall the upstream process's stdout drain.
-	broadcastCh chan []byte
+	broadcastCh chan DataEvent
 	dropped     atomic.Uint64
+	// droppedSeq is the largest sequence number among the dropped lines.
+	droppedSeq atomic.Uint64
 
 	level      Level
 	prefix     string
@@ -128,7 +137,7 @@ func NewWriter(stdout io.Writer) *Monitor {
 		eventbus:    event.NewDispatcherConfig(1000),
 		buffer:      nil,
 		stdout:      stdout,
-		broadcastCh: make(chan []byte, 1024),
+		broadcastCh: make(chan DataEvent, 1024),
 		level:       LevelInfo,
 		prefix:      "",
 		timeFormat:  "",
@@ -152,19 +161,24 @@ func (w *Monitor) Write(p []byte) (n int, err error) {
 		w.buffer = newCircularBuffer(BufferSize)
 	}
 	w.buffer.Write(p)
+	w.seq++
+	seq := w.seq
 	w.bufferMu.Unlock()
 
 	bufferCopy := make([]byte, len(p))
 	copy(bufferCopy, p)
 	select {
-	case w.broadcastCh <- bufferCopy:
+	case w.broadcastCh <- DataEvent{Data: bufferCopy, Seq: seq}:
 	default:
 		// Subscribers (e.g. the web UI log stream) can't keep up. Drop the
 		// live broadcast rather than block: for the upstream monitor Write
 		// runs on the process's stdout drain, so blocking here stalls
 		// llama.cpp itself (issue #875). GetHistory() still has the data for
 		// reconnecting clients, and the dropped bytes are reported in-stream
-		// below.
+		// below. droppedSeq is raised before dropped so the broadcast loop,
+		// which reads dropped first, sees a sequence number covering it.
+		for old := w.droppedSeq.Load(); seq > old && !w.droppedSeq.CompareAndSwap(old, seq); old = w.droppedSeq.Load() {
+		}
 		w.dropped.Add(uint64(len(p)))
 	}
 	return n, nil
@@ -187,10 +201,41 @@ func (w *Monitor) Clear() {
 	w.bufferMu.Unlock()
 }
 
-func (w *Monitor) OnLogData(callback func(data []byte)) context.CancelFunc {
-	return event.Subscribe(w.eventbus, func(e DataEvent) {
-		callback(e.Data)
+// Subscribe calls live with every line written after the subscription. When
+// history is non-nil it first receives the lines written before, on the
+// caller's goroutine, before live receives anything. Live delivery to every
+// subscriber waits while history runs, so history must not block. The broadcast to
+// subscribers lags Write, so Subscribe matches the two by sequence number:
+// each line reaches exactly one of them.
+func (w *Monitor) Subscribe(history, live func(data []byte)) context.CancelFunc {
+	// mu holds live lines back until the history has gone out. Until the
+	// snapshot is taken, every delivered line comes from a Write that
+	// finished before it, so the snapshot holds it and the line is dropped.
+	var mu sync.Mutex
+	since := uint64(math.MaxUint64)
+
+	mu.Lock()
+	defer mu.Unlock()
+	cancel := event.Subscribe(w.eventbus, func(e DataEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		if e.Seq > since {
+			live(e.Data)
+		}
 	})
+
+	w.bufferMu.RLock()
+	var snapshot []byte
+	if w.buffer != nil {
+		snapshot = w.buffer.GetHistory()
+	}
+	since = w.seq
+	w.bufferMu.RUnlock()
+
+	if history != nil && len(snapshot) != 0 {
+		history(snapshot)
+	}
+	return cancel
 }
 
 // broadcastLoop is the only place that publishes to the (backpressuring)
@@ -200,10 +245,12 @@ func (w *Monitor) OnLogData(callback func(data []byte)) context.CancelFunc {
 func (w *Monitor) broadcastLoop() {
 	for msg := range w.broadcastCh {
 		if dropped := w.dropped.Swap(0); dropped > 0 {
+			// A subscriber whose history already holds every dropped line
+			// skips the notice.
 			notice := fmt.Appendf(nil, "\n— %d bytes dropped —\n", dropped)
-			event.Publish(w.eventbus, DataEvent{Data: notice})
+			event.Publish(w.eventbus, DataEvent{Data: notice, Seq: w.droppedSeq.Load()})
 		}
-		event.Publish(w.eventbus, DataEvent{Data: msg})
+		event.Publish(w.eventbus, msg)
 	}
 }
 
