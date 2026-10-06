@@ -123,7 +123,8 @@ another drain of the tenant is running does it wait for that drain instead.
 An API unload drains before it stops anything, so requests for other models
 are still served while it waits on a busy tenant; the unload call returns
 once its models have stopped. Shutdown, which a config reload also runs, gives
-each drain at most its own 30-second timeout, even when `unloadTimeout` is
+each drain at most its own timeout (30 seconds on a config reload, the rest
+of the 30-second shutdown deadline on SIGTERM), even when `unloadTimeout` is
 longer, and stops waiting on a drain an unload had already started. A job
 still busy then is cut off, so on a reload with a long render running, wait
 for it to finish first.

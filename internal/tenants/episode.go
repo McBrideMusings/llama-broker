@@ -67,7 +67,7 @@ func (m *Manager) BeginStopsWithin(timeouts map[string]time.Duration, limit time
 // drain, and the unloadTimeout that drain must finish within: the largest
 // among model's open episodes and model's own, cut to the smallest limit among
 // those episodes. A stop that does not run one returns once the drain covering
-// it has ended, or once that timeout has passed, whichever is first.
+// it has ended or, under a limit, once that timeout has passed.
 func (m *Manager) joinDrain(t *tenant, model string, unloadTimeout time.Duration) (run *drainRun, timeout time.Duration, runs bool) {
 	skip := func(first string) {
 		m.record(Decision{Tenant: t.name, Model: model, Action: ActionDrain,
@@ -99,8 +99,15 @@ func (m *Manager) joinDrain(t *tenant, model string, unloadTimeout time.Duration
 	}
 	if r := t.run; r != nil {
 		t.drainMu.Unlock()
-		wait := time.NewTimer(timeout)
-		defer wait.Stop()
+		// Only a limit cuts the wait short: without one, a stop with a smaller
+		// unloadTimeout than the running drain still waits for the tenant to go
+		// idle rather than stopping a model mid-job.
+		var expired <-chan time.Time
+		if limit > 0 {
+			wait := time.NewTimer(timeout)
+			defer wait.Stop()
+			expired = wait.C
+		}
 		select {
 		case <-r.done:
 			t.drainMu.Lock()
@@ -111,7 +118,7 @@ func (m *Manager) joinDrain(t *tenant, model string, unloadTimeout time.Duration
 			}
 			t.drainMu.Unlock()
 			skip(r.first)
-		case <-wait.C:
+		case <-expired:
 			m.recordAt(m.log.Warnf, Decision{Tenant: t.name, Model: model, Action: ActionDrain,
 				Reason: fmt.Sprintf("the drain started by the stop of %s is still running after %s, stopping anyway", r.first, timeout)})
 		}

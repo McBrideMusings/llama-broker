@@ -282,7 +282,10 @@ func TestTenants_UnloadDrainDoesNotBlockOtherRequests(t *testing.T) {
 		rt.Unload(0, "job")
 		close(unloaded)
 	}()
-	for !strings.Contains(string(logs.ProxyLogs.GetHistory()), "busy, waiting") {
+	for waited := time.Now(); !strings.Contains(string(logs.ProxyLogs.GetHistory()), "busy, waiting"); {
+		if time.Since(waited) > 5*time.Second {
+			t.Fatal("job's drain never logged a busy wait")
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
 

@@ -220,3 +220,29 @@ func TestTenants_ShutdownLimitCapsTheDrain(t *testing.T) {
 		t.Fatalf("drain took %s under a 200ms shutdown limit", took)
 	}
 }
+
+func TestTenants_StopWithSmallerTimeoutWaitsForRunningDrain(t *testing.T) {
+	var busy atomic.Bool
+	var freed atomic.Int32
+	busy.Store(true)
+	m := busyTenant(busyServer(t, &busy, &freed), logmon.New())
+	hook := m.StopHook("lo-model")
+
+	// A drain with a 5s unloadTimeout runs; the tenant goes idle after 400ms.
+	go hook(5 * time.Second)
+	for m.Status(nil, nil).Tenants[0].Drains != 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.AfterFunc(400*time.Millisecond, func() { busy.Store(false) })
+
+	// With no shutdown limit, a stop whose own unloadTimeout is 100ms still
+	// waits for that drain instead of stopping its model mid-job.
+	start := time.Now()
+	hook(100 * time.Millisecond)
+	if took := time.Since(start); took < 300*time.Millisecond {
+		t.Fatalf("stop returned after %s, before the running drain ended", took)
+	}
+	if n := freed.Load(); n != 1 {
+		t.Fatalf("drain actions %d, want 1", n)
+	}
+}
