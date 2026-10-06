@@ -18,7 +18,8 @@ func (m *Manager) conditionRead(t *tenant, res probeResult) {
 	m.mu.Unlock()
 
 	if failed > 0 {
-		m.log.Infof("tenants: %s (priority %d) condition probe recovered after %d failed polls", t.name, t.cfg.Priority, failed)
+		m.log.Infof("tenants: %s (priority %d) condition probe recovered after %d failed polls time=%s",
+			t.name, t.cfg.Priority, failed, at.Format(time.RFC3339Nano))
 	}
 	if changed {
 		m.log.Infof("tenants: %s (priority %d) condition %s; wants GPU: %v time=%s",
@@ -35,6 +36,7 @@ func (m *Manager) conditionRead(t *tenant, res probeResult) {
 func (m *Manager) conditionFailed(t *tenant, res probeResult) {
 	m.mu.Lock()
 	t.condErr, t.condErrAt = res, time.Now().UTC()
+	at := t.condErrAt
 	t.condErrors++
 	n := t.condErrors
 	keeping := t.keptReadingLocked()
@@ -44,8 +46,8 @@ func (m *Manager) conditionFailed(t *tenant, res probeResult) {
 	if n == 1 {
 		logf = m.log.Warnf
 	}
-	logf("tenants: %s (priority %d) condition probe failed (%d in a row): %s; %s",
-		t.name, t.cfg.Priority, n, res.failure(), keeping)
+	logf("tenants: %s (priority %d) condition probe failed (%d in a row): %s; %s time=%s",
+		t.name, t.cfg.Priority, n, res.failure(), keeping, at.Format(time.RFC3339Nano))
 }
 
 // keptReadingLocked says which reading a failed condition probe leaves in

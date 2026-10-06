@@ -176,9 +176,14 @@ tenants: decision time=2026-10-05T14:02:11Z tenant=chat model=qwen action=hold p
   condition endpoint stopped answering while it read true, and a failed
   probe keeps that reading. The first failure in a row logs a warning:
   `tenants: <name> (priority N) condition probe failed (1 in a row): <error>;
-  keeping wants GPU: true from the reading at <time>`. `GET /api/tenants` shows
-  the count under `condition.errors`. Bring the endpoint back, or have it
-  answer false while the workload is down. A probe slower than `interval`
+  keeping wants GPU: true from the reading at <reading time>
+  time=<UTC>`. `<reading time>` is when the kept reading was taken; `time`
+  is when this probe failed, the same instant `GET /api/tenants` reports as
+  `condition.lastErrorAt`. The next successful probe logs `tenants: <name>
+  (priority N) condition probe recovered after N failed polls time=<UTC>`,
+  where `time` is that reading's `condition.probedAt`. `GET /api/tenants`
+  shows the count under `condition.errors`. Bring the endpoint back, or have
+  it answer false while the workload is down. A probe slower than `interval`
   fails every poll; raise `interval`.
 - **A tenant without a `condition` never preempts anything.** It can only be
   held, refused or drained by higher tenants.

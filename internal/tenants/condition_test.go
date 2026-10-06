@@ -120,6 +120,32 @@ func TestTenants_ConditionChangeLogsReadingTime(t *testing.T) {
 	}
 }
 
+func TestTenants_ConditionFailureAndRecoveryLogTheirTimes(t *testing.T) {
+	var mode atomic.Value
+	mode.Store("broken")
+	srv := modeServer(t, &mode)
+	log := logmon.NewWriter(io.Discard)
+	m := New(twoTenants(srv.URL, config.TenantOnBlockedHold), log)
+	hi := m.byName("hi")
+	hi.interval = time.Hour // one poll; the second probe is run by hand
+	m.Start(t.Context(), &fakeRouter{running: map[string]process.ProcessState{}})
+	eventually(t, "the first failure line", func() bool {
+		return strings.Contains(string(log.GetHistory()), "condition probe failed (1 in a row)")
+	})
+
+	want := "no reading yet, wants GPU stays false time=" + hiCondition(m).LastErrorAt.Format(time.RFC3339Nano)
+	if history := string(log.GetHistory()); !strings.Contains(history, want) {
+		t.Fatalf("log lacks %q, the failure's lastErrorAt:\n%s", want, history)
+	}
+
+	mode.Store("on")
+	m.checkCondition(t.Context(), hi)
+	want = "condition probe recovered after 1 failed polls time=" + hiCondition(m).ProbedAt.Format(time.RFC3339Nano)
+	if history := string(log.GetHistory()); !strings.Contains(history, want) {
+		t.Fatalf("log lacks %q, the recovering reading's probedAt:\n%s", want, history)
+	}
+}
+
 func TestTenants_ConditionErrorBeforeFirstReading(t *testing.T) {
 	var mode atomic.Value
 	mode.Store("broken")
