@@ -1,5 +1,35 @@
 # Changelog
 
+## v264 (Oct 12, 2026)
+
+This release includes a new `auto:orphans` set for swap matrix rules. This new set automatically includes all models that were not explictly added to a set.  It is defined as `(orphan1 | orphan2 | orphan3 | ...)`. The orphans set is handy for definitions like: `+always & +auto:orphans`, where `+always` is a set of models that are always loaded and should never be swapped out.
+
+The /audiocpp endpoint was added to make working with audio.cpp server eaiser. The `audiocpp_auto` model is automatically used when the endpoint is requested. audio.cpp's OpenAI compatible endpoints can be accessed directly via `/audiocpp/v1/audio/*`. Very handy when used with llama-swap's unified docker container which builds audio.cpp with the UI and native model downloader.
+
+Also one tiny commit to improve compatibility with llama-server's decision model functionality.
+
+Thanks to the contributors in this release, especially @knguyen298 for being patient and keeping his PR updated.
+
+- [PR #1026](https://github.com/mostlygeek/llama-swap/pull/1026) internal/matrix: add synthetic auto:orphans set: adds a `+auto:orphans` selector that expands to every model not named in another set, so a catch-all set like `"+always & +auto:orphans"` picks up new models automatically (#1025) by [@knguyen298](https://github.com/knguyen298)
+- [PR #1223](https://github.com/mostlygeek/llama-swap/pull/1223) Add /audiocpp endpoint for audio.cpp UI passthrough: serves audio.cpp's web UI and model management through a dedicated `/audiocpp/` endpoint bound to the reserved `audiocpp_auto` model, like `/comfyui/`, so the unified container works without naming a model per request by [@mostlygeek](https://github.com/mostlygeek)
+- [PR #1220](https://github.com/mostlygeek/llama-swap/pull/1220) internal/capcompat: detect decision models from llama-server's listing: fix decision models being reported as `out: [text]` (and `capabilities.out: [decisions]` failing validation) because discovery only read `/props`; `output_modalities` from `/v1/models` is now used, and tools are only advertised when the model outputs text (#1219) by [@nazeshinjite](https://github.com/nazeshinjite)
+
+## v263 (Oct 9, 2026)
+
+I've been busy, busy, busy and have not had as much time for llama-swap as I
+would like. This release includes reliability improvements, improved
+compatibility and some small quality of life improvements. Thank you for the
+amazing contributors for this release! Everyone who files issues or submits a
+PR is greatly appreciated.
+
+- [PR #1213](https://github.com/mostlygeek/llama-swap/pull/1213) Add confirmation UI and progress tracking for WoL wake: wol-proxy gets a `-require-confirm` flag that shows a "Start server" page instead of waking on every request, plus a retro loading page with a progress bar estimated from the last wake duration by [@mostlygeek](https://github.com/mostlygeek)
+- [PR #1215](https://github.com/mostlygeek/llama-swap/pull/1215) internal/router: strip browser headers before proxying to peers: fix UI chats failing with a 401 against an api.anthropic.com peer, which treated the forwarded browser Origin header as a direct browser call; Origin, Referer, Sec-Fetch-* and Access-Control-Request-* are now removed (#1214) by [@mostlygeek](https://github.com/mostlygeek)
+- [PR #1212](https://github.com/mostlygeek/llama-swap/pull/1212) internal/process: report loading progress from the health check: parse `progress`/`message` from not-ready health check JSON bodies, show it on the Models and model detail pages, and restart the `healthCheckTimeout` countdown when progress changes so long loads don't time out (#1079, #1208) by [@mostlygeek](https://github.com/mostlygeek)
+- [PR #1196](https://github.com/mostlygeek/llama-swap/pull/1196) internal/perf: restart loop to trigger GPU collector when the monitor still running: fix GPU stats stopping for good after `nvidia-smi` exited; the exit error is now logged and the collector restarts with a 5 to 30 second backoff (#1155) by [@hpdkhoa](https://github.com/hpdkhoa)
+- [PR #1211](https://github.com/mostlygeek/llama-swap/pull/1211) internal/process: add a per-model disableKeepAlives option (#1205): fix intermittent 502 `proxy error: EOF` when a POST reused a pooled connection that llama-server closed after a streamed response; `disableKeepAlives: true` opens a new connection per request by [@johnnieCR](https://github.com/johnnieCR)
+- [PR #1199](https://github.com/mostlygeek/llama-swap/pull/1199) fix(metrics): show oMLX token rates in Activity: read oMLX's `usage.prompt_tokens_per_second` and `usage.generation_tokens_per_second` as a fallback so rates no longer show as unknown by [@junmo-kim](https://github.com/junmo-kim)
+- [PR #1198](https://github.com/mostlygeek/llama-swap/pull/1198) internal/capcompat: add Gufo inference engine prober: add a default capability prober that uses only `/v1/models` data as the fallback for servers without a custom prober (vLLM, Gufo, SGLang, etc.), replacing the vLLM-specific one by [@berney](https://github.com/berney)
+
 ## v262 (Oct 2, 2026)
 
 systemone models are mega hyped right now. This release adds support for
