@@ -699,7 +699,7 @@ func TestServer_APILogEvents_NoHistory(t *testing.T) {
 	// UPSTREAMHIST after the handler has subscribed and make it look live.
 	published := make(chan struct{})
 	var once sync.Once
-	stop := s.logs.UpstreamLogs.OnLogData(func(data []byte) {
+	stop := s.logs.UpstreamLogs.Subscribe(nil, func(data []byte) {
 		if bytes.Contains(data, []byte("UPSTREAMHIST")) {
 			once.Do(func() { close(published) })
 		}
