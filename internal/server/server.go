@@ -397,6 +397,9 @@ func (s *Server) routes() {
 		CreateUpstreamRequestLogMiddleware(s.upstreamLog, s.cfg, func(err error) {
 			s.logs.ProxyLogs.Errorf("upstream request log: %v", err)
 		}),
+		CreateUpstreamLimitsMiddleware(s.cfg, func(format string, args ...any) {
+			s.logs.ProxyLogs.Warnf(format, args...)
+		}),
 		CreateProfileMiddleware(s),
 		CreateUpstreamInflightMiddleware(s.inflight, s.cfg),
 		CreateMetricsMiddleware(s.metrics, s.cfg),

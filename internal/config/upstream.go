@@ -30,13 +30,18 @@ type UpstreamConfig struct {
 
 	// RequestLog records /upstream/<model>/* requests to a rotated file.
 	RequestLog UpstreamRequestLogConfig `yaml:"requestLog"`
+
+	// Limits bounds concurrency, queue depth and duration per model, keyed by
+	// model ID or alias.
+	Limits map[string]UpstreamLimitConfig `yaml:"limits,omitempty"`
 }
 
 // rawUpstreamConfig is the intermediate form used to unmarshal the YAML into
 // plain strings, which are then compiled into *regexp.Regexp.
 type rawUpstreamConfig struct {
-	IgnorePaths []string                 `yaml:"ignorePaths"`
-	RequestLog  UpstreamRequestLogConfig `yaml:"requestLog"`
+	IgnorePaths []string                       `yaml:"ignorePaths"`
+	RequestLog  UpstreamRequestLogConfig       `yaml:"requestLog"`
+	Limits      map[string]UpstreamLimitConfig `yaml:"limits"`
 }
 
 // UnmarshalYAML compiles each ignorePaths entry into a *regexp.Regexp. If any
@@ -59,5 +64,11 @@ func (u *UpstreamConfig) UnmarshalYAML(value *yaml.Node) error {
 		return err
 	}
 	u.RequestLog = raw.RequestLog
+	for model, l := range raw.Limits {
+		if err := l.validate(model); err != nil {
+			return err
+		}
+	}
+	u.Limits = raw.Limits
 	return nil
 }

@@ -847,6 +847,34 @@
                     ],
                     "description": "List of RE2 compatible regular expressions. Any request to a path matching any of the regular expressions will be ignored and not trigger a swap. When not specified, defaults to a pattern matching common static-asset suffixes (.js, .json, .css, .png, .gif, .jpg, .jpeg, .ico, .txt)."
                 },
+                "limits": {
+                    "type": "object",
+                    "description": "Bounds the requests one model handles through /upstream/<model>/*, keyed by model ID or alias.",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "maxConcurrent": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "default": 0,
+                                "description": "Requests that run at once; later requests wait in a queue. 0 means no limit."
+                            },
+                            "maxQueue": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "default": 0,
+                                "description": "Requests allowed to wait for a slot. One more is refused with 503 and a Retry-After header. Requires maxConcurrent."
+                            },
+                            "timeout": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "default": 0,
+                                "description": "Seconds a request may take, queue wait included. The upstream request is cancelled and the client gets 504. 0 means no limit."
+                            }
+                        },
+                        "additionalProperties": false
+                    }
+                },
                 "requestLog": {
                     "type": "object",
                     "description": "Appends one JSON line per /upstream/<model>/* request to the listed models to a size-rotated file. Read it back with GET /api/upstream/requests.",

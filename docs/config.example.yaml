@@ -289,6 +289,23 @@ upstream:
   #   maxSizeMB: 10
   #   maxBackups: 3
 
+  # limits: bound the requests one model handles through /upstream/<model>/*
+  # - optional, default: no limits
+  # - keyed by model ID or alias
+  # - maxConcurrent: requests that run at once; the rest wait in a queue
+  #   (default: 0, no limit)
+  # - maxQueue: requests allowed to wait; one more is refused with 503 and a
+  #   Retry-After header. Requires maxConcurrent (default: 0)
+  # - timeout: seconds a request may take, queue wait included; the upstream
+  #   request is cancelled and the client gets 504 (default: 0, no limit)
+  # - a client that disconnects while waiting leaves the queue without
+  #   reaching the model
+  # limits:
+  #   qmd:
+  #     maxConcurrent: 1
+  #     maxQueue: 3
+  #     timeout: 60
+
 # profiles: named model ID replacements switched at runtime through the UI or API
 # - optional, default: empty dictionary
 # - one profile or none is active; hooks.on_startup.profile selects the profile

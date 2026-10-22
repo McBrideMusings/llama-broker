@@ -1,9 +1,9 @@
 ---
 title: Upstream API passthrough
-summary: Control which /upstream model paths are ignored instead of triggering a model swap, and log upstream requests to a file.
+summary: Control which /upstream model paths are ignored instead of triggering a model swap, and log upstream requests to a file, and limit a model's concurrency, queue depth and request time.
 category: guides
 tags: [upstream, proxy, api]
-config_keys: [upstream, upstream.ignorePaths, upstream.requestLog]
+config_keys: [upstream, upstream.ignorePaths, upstream.requestLog, upstream.limits]
 updated: 2026-08-28
 ---
 
@@ -42,3 +42,28 @@ Failed, timed-out and empty requests get a line too. `results` and `top` are
 newest matching lines, oldest first. It answers 404 until `path` is set. Point
 `path` at persistent storage: a path inside the container is deleted with it.
 Setting `path` without `models` fails config loading.
+
+## Limit a slow model
+
+`upstream.limits` protects a model that handles one request at a time, such
+as a search server on a busy GPU. Without a limit, every request a client
+abandons stays queued and the backlog grows by each request's duration.
+
+```yaml
+upstream:
+  limits:
+    qmd:
+      maxConcurrent: 1
+      maxQueue: 3
+      timeout: 60
+```
+
+- `maxConcurrent` requests run at once. The broker holds the rest, so a
+  client that disconnects while waiting leaves without reaching the model.
+- With `maxQueue` requests already waiting, the next one gets `503` with
+  `Retry-After: 5`. `maxQueue` needs `maxConcurrent`.
+- A request that takes longer than `timeout` seconds, queue wait included,
+  is cancelled and the client gets `504`.
+
+Set `timeout` above the model's normal worst case, or healthy slow requests
+fail. Model load time counts toward it.
