@@ -200,6 +200,9 @@ type Config struct {
 	// VRAMReserve is MiB of GPU memory kept free for programs llama-broker
 	// does not manage; see tenants.go.
 	VRAMReserve int `yaml:"vramReserve"`
+	// VRAMExternal is MiB of GPU memory each always-on program outside
+	// llama-broker uses, by name; see tenants.go.
+	VRAMExternal map[string]int `yaml:"vramExternal"`
 
 	// GlobalConcurrencyLimit caps the number of inference requests served at
 	// once across all models. 0 (default) means no limit. See issue #1086.

@@ -66,16 +66,16 @@ func (m *Manager) Record(model string, reason error, refuse bool) {
 		return
 	}
 	t := m.byModel[model]
-	if t == nil {
-		return
-	}
 	action := ActionHold
 	if refuse {
 		action = ActionRefuse
 	}
 	var reserve *ReserveError
 	if errors.As(reason, &reserve) {
-		m.record(Decision{Tenant: t.name, Model: model, Action: action, Probe: reserve.Probe(), Reason: reason.Error()})
+		m.record(Decision{Tenant: reserve.Tenant, Model: model, Action: action, Probe: reserve.Probe(), Reason: reason.Error()})
+		return
+	}
+	if t == nil {
 		return
 	}
 	// The probe behind a block is the condition of the tenant that wants the
@@ -220,9 +220,10 @@ func (m *Manager) Status(running map[string]process.ProcessState, held map[strin
 	if m == nil {
 		return st
 	}
+	meas := m.read() // before mu: the reader may be slow
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	st.VRAM = m.vramStatusLocked(slices.Collect(maps.Keys(running)))
+	st.VRAM = m.vramStatusLocked(slices.Collect(maps.Keys(running)), meas)
 	for _, t := range m.tenants {
 		ts := TenantStatus{
 			Name:      t.name,

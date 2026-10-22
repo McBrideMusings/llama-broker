@@ -524,6 +524,12 @@
                         "default": "",
                         "description": "Override the model name sent to upstream server. Useful if upstream expects a different name."
                     },
+                    "vram": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0,
+                        "description": "GPU memory in MiB this model uses while it runs. Counted against the card total when vramReserve or vramExternal is set. Ignored for a model in a tenant that sets vram."
+                    },
                     "filters": {
                         "type": "object",
                         "properties": {
@@ -1043,7 +1049,7 @@
                     "models": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Model IDs or aliases this tenant owns. A model belongs to at most one tenant."},
                     "groups": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Routing groups whose members this tenant owns. Needs the group router."},
                     "priority": {"type": "integer", "default": 0, "description": "Higher priority wins the GPU."},
-                    "vram": {"type": "integer", "minimum": 0, "default": 0, "description": "GPU memory in MiB this tenant uses while any of its models runs. Checked against vramReserve; with a reserve set, every model needs a tenant with vram."},
+                    "vram": {"type": "integer", "minimum": 0, "default": 0, "description": "GPU memory in MiB this tenant uses while any of its models runs. Counted once for the tenant, in place of its models' own vram, by the checks that vramReserve and vramExternal turn on."},
                     "condition": {"$ref": "#/definitions/tenantProbe", "description": "Polled every interval; while true the tenant wants the GPU. A probe that errors or times out (after interval seconds) keeps the last reading. Without it the tenant never preempts others."},
                     "busy": {"$ref": "#/definitions/tenantProbe", "description": "Polled during a drain; the stop waits while it is true or the probe fails, up to the model's unloadTimeout."},
                     "drain": {"$ref": "#/definitions/tenantAction", "description": "Run once the busy probe reads false, just before the stop."},
@@ -1058,7 +1064,12 @@
             "type": "integer",
             "minimum": 0,
             "default": 0,
-            "description": "GPU memory in MiB kept free for programs llama-broker does not manage. A load is held (or refused, per the tenant's onBlocked) while the vram of running tenants, the loading tenant's vram and the reserve exceed the total from hardware detection. 0 disables it. With a reserve set, every model must belong to a tenant that sets vram."
+            "description": "GPU memory in MiB kept free for programs llama-broker does not manage. A load is held (or refused, per the tenant's onBlocked; a model outside every tenant is refused with a 503) while the vramExternal users, the vram of running tenants and models, the loading model's vram and the reserve exceed the total from hardware detection, or while the GPU memory in use now (nvidia-smi) plus the loading model's vram and the reserve exceed it. 0 turns the reserve off."
+        },
+        "vramExternal": {
+            "type": "object",
+            "description": "Always-on GPU users outside llama-broker, such as a qmd container: name -> MiB. The sum is subtracted from the card total for every load decision, whether or not they are running.",
+            "additionalProperties": {"type": "integer", "minimum": 0}
         },
         "routing": {
             "type": "object",

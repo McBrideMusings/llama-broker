@@ -26,8 +26,9 @@ type TenantConfig struct {
 	Priority int      `yaml:"priority"`
 
 	// VRAM is the GPU memory, in MiB, the tenant uses while any of its models
-	// is running. With a top-level vramReserve, a load is held while the
-	// needs of running tenants plus the reserve would exceed the card total.
+	// is running. With a top-level vramReserve or vramExternal, a load is held
+	// while the needs of running tenants and models, the external users and
+	// the reserve would exceed the card total.
 	VRAM int `yaml:"vram"`
 
 	// Condition is polled every Interval seconds. Without one the tenant never
@@ -169,7 +170,7 @@ func validateTenants(config *Config) error {
 
 		config.Tenants[name] = t
 	}
-	return validateVRAMReserve(config, owner)
+	return validateVRAMReserve(config)
 }
 
 // PersistentModels returns the members of every persistent routing group,
@@ -186,24 +187,20 @@ func (c *Config) PersistentModels() []string {
 	return slices.Compact(ids)
 }
 
-// validateVRAMReserve checks that, with a reserve set, every model belongs to a
-// tenant that declares its vram need: an uncounted load could eat the reserve.
-func validateVRAMReserve(config *Config, owner map[string]string) error {
+// validateVRAMReserve checks the VRAM settings are not negative.
+func validateVRAMReserve(config *Config) error {
 	if config.VRAMReserve < 0 {
 		return fmt.Errorf("vramReserve must be >= 0")
 	}
-	if config.VRAMReserve == 0 {
-		return nil
-	}
-	var undeclared []string
-	for id := range config.Models {
-		if t, ok := owner[id]; !ok || config.Tenants[t].VRAM == 0 {
-			undeclared = append(undeclared, id)
+	for name, mib := range config.VRAMExternal {
+		if mib < 0 {
+			return fmt.Errorf("vramExternal.%s must be >= 0", name)
 		}
 	}
-	if len(undeclared) > 0 {
-		sort.Strings(undeclared)
-		return fmt.Errorf("vramReserve needs every model in a tenant with vram set; no declared need for %v", undeclared)
+	for id, m := range config.Models {
+		if m.VRAM < 0 {
+			return fmt.Errorf("models.%s.vram must be >= 0", id)
+		}
 	}
 	return nil
 }

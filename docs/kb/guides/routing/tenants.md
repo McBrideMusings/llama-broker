@@ -3,7 +3,7 @@ title: Sharing one GPU between workloads with tenants
 summary: Rank GPU workloads by priority so a higher one holds or refuses lower models, and drains then stops a lower one to make room.
 category: guides
 tags: [tenants, priority, idle, gpu, drain, busy, condition, preempt, hold, refuse, comfyui, vram, reserve, preload, startup]
-config_keys: [tenants, tenants.*.models, tenants.*.groups, tenants.*.priority, tenants.*.idleLoad, tenants.*.vram, tenants.*.condition, tenants.*.busy, tenants.*.drain, tenants.*.interval, tenants.*.onBlocked, vramReserve, unloadTimeout, hooks.on_startup.preload]
+config_keys: [tenants, tenants.*.models, tenants.*.groups, tenants.*.priority, tenants.*.idleLoad, tenants.*.vram, tenants.*.condition, tenants.*.busy, tenants.*.drain, tenants.*.interval, tenants.*.onBlocked, vramReserve, vramExternal, models.*.vram, unloadTimeout, hooks.on_startup.preload]
 updated: 2026-10-06
 ---
 
@@ -177,28 +177,48 @@ within `interval` seconds. Each idle load writes a decision line with
 
 ## Keeping VRAM free for other programs
 
-`vramReserve` keeps that many MiB of GPU memory free for programs
-llama-broker does not manage, such as a video transcoder. Each tenant declares
-`vram`, the MiB it uses while any of its models runs. A load is held, or
-refused under `onBlocked: refuse`, while the `vram` of the tenants running
-alongside it, plus its own tenant's `vram`, plus the reserve, exceeds the card
-total. The total is the sum of accelerator memory that hardware detection
-reports (`GET /api/hardware`). Tenants that the load's own swap evicts don't
-count, and a tenant that is already running is never held by the reserve.
+Three settings declare GPU memory in MiB, and setting `vramReserve` or
+`vramExternal` turns the check on:
+
+- `vramReserve` keeps that much free for programs llama-broker does not know
+  about, such as a video transcoder.
+- `vramExternal` lists always-on GPU users outside llama-broker, by name, such
+  as a qmd container. Their sum is subtracted from the card total for every
+  load decision, whether or not they are running.
+- `vram` on a tenant is what it uses while any of its models runs. `vram` on a
+  model (`models.<id>.vram`) is what that model uses while it runs, for models
+  in a persistent group or otherwise outside a tenant that sets `vram`. A model
+  in a tenant that sets `vram` is counted through the tenant.
+
+The total is the sum of accelerator memory that hardware detection reports
+(`GET /api/hardware`). Before every load the broker checks two figures and
+holds the load when either is over the total:
+
+1. Declared: `vramExternal` plus the `vram` of everything running alongside
+   the load, plus the loaded model's own `vram`, plus the reserve.
+2. Measured: the GPU memory in use now, read with a fresh `nvidia-smi` call
+   (reused for at most 2 s), less the declared `vram` of what the load's own
+   swap evicts, plus the loaded model's own `vram`, plus the reserve.
+
+A held load waits in the queue, or is refused with a 503 and `Retry-After`
+under `onBlocked: refuse`. A model outside every tenant has no `onBlocked`, so
+it is always refused. Models that the load's own swap evicts don't count in the
+declared figure, and a model or tenant that is already running is never held.
 
 ```yaml
 vramReserve: 4096            # MiB left for the transcoder
+vramExternal:
+  qmd: 2138                  # the qmd container's models
+models:
+  embeddinggemma-300m: {vram: 614}
 tenants:
   comfy: {priority: 10, models: [comfy], vram: 12000}
   chat:  {priority: 1, groups: [llms], vram: 9000}
 ```
 
-On a 24576 MiB card, comfy (12000) and chat (9000) plus the 4096 reserve come
-to 25096 MiB, so whichever loads second waits until the first stops. With a
-reserve set, every model must belong to a tenant that sets `vram`, or the
-config fails to load: a load nobody declared could use up the reserve without
-the broker knowing. The reserve hold writes the raw numbers into the
-decision line:
+On a 24576 MiB card, comfy (12000) and chat (9000) plus the 4096 reserve and
+2138 external come to 27234 MiB, so whichever loads second waits until the
+first stops. The reserve hold writes the raw numbers into the decision line:
 
 ```text
 tenants: decision time=2026-10-05T14:02:11Z tenant=chat model=qwen action=hold probe="vram total=24576MiB reserve=4096MiB running=[comfy:12000] need=chat:9000" reason="model qwen (tenant chat) is blocked: its vram 9000 MiB plus 12000 MiB of running tenants plus vramReserve 4096 MiB is 25096 MiB, over the 24576 MiB total"
@@ -216,8 +236,10 @@ tenants: decision time=2026-10-05T14:02:11Z tenant=chat model=qwen action=hold p
   `onBlocked: refuse` get a 503 of type `tenant_condition_pending`. The
   decision line's probe reads `condition of <name>: not read yet`. A slow
   probe holds them for up to `interval` seconds.
-- **A model outside every tenant still loads.** Tenants never hold, refuse or
-  drain models that no tenant owns. Give each GPU model a tenant.
+- **A model outside every tenant still loads.** Tenants never hold or drain
+  models that no tenant owns. Only the VRAM checks apply to them, and only
+  when `vramReserve` or `vramExternal` is set. Give each GPU model a tenant,
+  or a `vram`.
 - **Lower tenants stay blocked after the higher workload ended.** The
   condition endpoint stopped answering while it read true, and a failed
   probe keeps that reading. The first failure in a row logs a warning:
@@ -249,6 +271,17 @@ tenants: decision time=2026-10-05T14:02:11Z tenant=chat model=qwen action=hold p
   vramReserve=... not enforced` and `GET /api/tenants` shows `"totalMiB":
   null`. On unified-memory machines (Apple silicon, GB10) the total is system
   memory.
+- **Some GPU memory belongs to nobody the config names.** The broker computes
+  `unknownMiB`, the GPU memory in use less the `vram` of everything running
+  less `vramExternal`. Above 256 MiB it logs `tenants: unknown VRAM user: <N>
+  MiB` (again only when the figure moves by more than 256 MiB). A model with
+  no `vram` shows up here as well, and its memory counts against every later
+  load. `GET /api/tenants` reports `externalMiB`, `measuredMiB` and
+  `unknownMiB` under `vram`.
+- **Loads are only checked against declared `vram`.** Without `nvidia-smi`
+  (a Mac, or a container without the GPU tools) the measured check is
+  skipped: startup logs `tenants: GPU memory is not measured`, and
+  `measuredMiB` and `unknownMiB` read `null`.
 - **A model waits forever under the reserve.** A tenant whose `vram` plus the
   reserve exceeds the total can never load; startup logs `tenants: <name> can
   never load`. Lower one of the two.

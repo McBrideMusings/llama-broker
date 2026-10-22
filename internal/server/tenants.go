@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/event"
 	"github.com/mostlygeek/llama-swap/internal/hw"
 	"github.com/mostlygeek/llama-swap/internal/router"
@@ -21,12 +22,23 @@ type tenantStatus interface {
 	TenantStatus() tenants.Status
 }
 
-// setTenantVRAM hands the tenant gate the card total from hardware detection
-// and the configured reserve. Both local routers implement router.VRAMSetter.
-func setTenantVRAM(local router.LocalRouter, hardware *hw.HardwareSnapshot, reserveMiB int) {
-	if v, ok := local.(router.VRAMSetter); ok {
-		v.SetVRAM(tenants.TotalVRAMMiB(hardware), reserveMiB)
+// setTenantVRAM hands the tenant gate the card total from hardware detection,
+// the configured reserve, external users and per-model vram, and the nvidia-smi
+// reader. Both local routers implement router.VRAMSetter.
+func setTenantVRAM(local router.LocalRouter, hardware *hw.HardwareSnapshot, cfg *config.Config) {
+	v, ok := local.(router.VRAMSetter)
+	if !ok {
+		return
 	}
+	models := make(map[string]int, len(cfg.Models))
+	for id, m := range cfg.Models {
+		if m.VRAM > 0 {
+			models[id] = m.VRAM
+		}
+	}
+	v.ConfigureVRAM(tenants.TotalVRAMMiB(hardware), tenants.VRAMConfig{
+		ReserveMiB: cfg.VRAMReserve, External: cfg.VRAMExternal, Models: models, Reader: hw.NvidiaMemoryUsedMiB,
+	})
 }
 
 // handleAPITenants returns the VRAM total, reserve and running tenants' needs,

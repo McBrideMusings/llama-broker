@@ -135,6 +135,9 @@ type ModelConfig struct {
 	UnloadTimeout int      `yaml:"unloadTimeout"`
 	Unlisted      bool     `yaml:"unlisted"`
 	UseModelName  string   `yaml:"useModelName"`
+	// VRAM is the GPU memory, in MiB, the model uses while it runs; see
+	// tenants.go. A model in a tenant that sets vram is counted by the tenant.
+	VRAM int `yaml:"vram"`
 
 	// #179 for /v1/models
 	Name        string `yaml:"name"`

@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -72,7 +73,18 @@ type Manager struct {
 
 	mu     sync.Mutex
 	router Router
-	vram   vram // set by SetVRAM; see reserve.go
+	vram   vram // set by ConfigureVRAM; see reserve.go
+	// The latest GPU memory reading, taken at memAt and reused while younger
+	// than memMaxAge; unknownLogged is the last unknown-user figure warned
+	// about (guarded by mu). The reading fields are guarded by memMu, which
+	// is held while the reader runs and never together with mu.
+	memMu         sync.Mutex
+	memAt         time.Time
+	memMiB        int64
+	memErr        error
+	memMaxAge     time.Duration
+	memFailLogged string
+	unknownLogged int64
 	// admitted maps a model to its tenant's condition reading when the gate
 	// last admitted it. The load decision logs that reading: a process starts
 	// only in a swap, which the scheduler starts on the same run-loop turn as
@@ -84,13 +96,11 @@ type Manager struct {
 	resident map[string]bool
 }
 
-// New builds a Manager from validated tenant configs. It returns nil when there
-// are none.
+// New builds a Manager from validated tenant configs. With none, the Manager
+// still checks loads against the VRAM settings.
 func New(cfgs map[string]config.TenantConfig, log *logmon.Monitor) *Manager {
-	if len(cfgs) == 0 {
-		return nil
-	}
-	m := &Manager{log: log, byModel: make(map[string]*tenant), admitted: make(map[string]string)}
+	m := &Manager{log: log, byModel: make(map[string]*tenant), admitted: make(map[string]string),
+		memMaxAge: measureMaxAge}
 	for name, cfg := range cfgs {
 		t := &tenant{name: name, cfg: cfg, interval: time.Duration(cfg.Interval) * time.Second}
 		m.tenants = append(m.tenants, t)
@@ -117,6 +127,7 @@ func (m *Manager) Start(ctx context.Context, r Router) {
 	m.router = r
 	m.mu.Unlock()
 	m.recordLoads(ctx)
+	go m.watchMemory(ctx)
 	for _, t := range m.tenants {
 		if t.cfg.Condition != nil {
 			go m.poll(ctx, t)
@@ -154,11 +165,20 @@ func (m *Manager) block(model string, alongside []string) (reason error, refuse 
 		return nil, false
 	}
 	t := m.byModel[model]
-	if t == nil {
-		return nil, false
+	var meas reading
+	if !slices.Contains(alongside, model) {
+		meas = m.read() // before mu: the reader may be slow
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if t == nil {
+		// A model outside every tenant has no onBlocked setting: it is refused
+		// with the 503 and Retry-After rather than held.
+		if err := m.reserveBlockLocked(nil, model, alongside, meas); err != nil {
+			return err, true
+		}
+		return nil, false
+	}
 
 	if h := m.blockerLocked(t); h != nil {
 		err := &BlockedError{Model: model, Tenant: t.name, Priority: t.cfg.Priority,
@@ -181,7 +201,7 @@ func (m *Manager) block(model string, alongside []string) (reason error, refuse 
 			}
 		}
 	}
-	if err := m.reserveBlockLocked(t, model, alongside); err != nil {
+	if err := m.reserveBlockLocked(t, model, alongside, meas); err != nil {
 		return err, t.cfg.OnBlocked == config.TenantOnBlockedRefuse
 	}
 	m.admitted[model] = t.conditionLocked()

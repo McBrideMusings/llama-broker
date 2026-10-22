@@ -225,7 +225,7 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 			return nil, fmt.Errorf("creating group router: %w", err)
 		}
 	}
-	setTenantVRAM(local, hardware, cfg.VRAMReserve)
+	setTenantVRAM(local, hardware, &cfg)
 
 	peer, err := router.NewPeer(cfg, logs.ProxyLogs)
 	if err != nil {

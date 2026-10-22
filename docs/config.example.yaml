@@ -319,8 +319,8 @@ upstream:
   # - probe.expect: top-level JSON array in the probe response that must hold
   #   at least one element
   # - probe.cacheSeconds: how long a probe result is reused (default: 10)
-  # - the broker does not track VRAM; reserve it in the model's own cmd (a
-  #   smaller context size) or with groups/matrix so the search model keeps room
+  # - reserve the search model's VRAM with the top-level vramExternal and
+  #   vramReserve settings
   # guards:
   #   qmd:
   #     paths: ['^/query$', '^/health$']
@@ -469,6 +469,12 @@ models:
       # or count toward concurrency, TTL activity, or swap decisions
       # - optional, default: false
       ignoreWebsockets: true
+
+    # vram: GPU memory in MiB this model uses while it runs
+    # - optional, default: 0
+    # - counted against the card total when vramReserve or vramExternal is set
+    # - ignored for a model in a tenant that sets vram
+    vram: 4000
 
     # useModelName: override the model name that is sent to upstream server
     # - optional, default: ""
@@ -727,8 +733,8 @@ tenants:
 
     # vram: GPU memory in MiB this tenant uses while any of its models runs
     # - optional, default: 0
-    # - counted against vramReserve; with a reserve set, every model needs a
-    #   tenant with vram
+    # - counted once for the tenant, in place of its models' own vram, by the
+    #   checks vramReserve and vramExternal turn on
     vram: 9000
 
     # models: model IDs or aliases this tenant owns
@@ -761,13 +767,22 @@ tenants:
 
 # vramReserve: GPU memory in MiB kept free for programs llama-broker does not manage
 # - optional, default: 0 (disabled)
-# - a load is held (or refused, per the tenant's onBlocked) while the vram of the
-#   tenants running alongside it, its own tenant's vram and the reserve exceed
-#   the accelerator memory total from hardware detection (GET /api/hardware)
-# - with a reserve set, every model must belong to a tenant that sets vram
+# - a load is held (or refused, per the tenant's onBlocked) while the vramExternal
+#   users, the vram of the tenants and models running alongside it, its own vram
+#   and the reserve exceed the accelerator memory total from hardware detection
+#   (GET /api/hardware)
+# - it is also held while the GPU memory in use now (nvidia-smi) plus its own vram
+#   and the reserve exceed the total
 # - when hardware detection reports no accelerator memory, the reserve is not
 #   enforced and the log says so
 vramReserve: 0
+
+# vramExternal: always-on GPU users outside llama-broker, name -> MiB
+# - optional, default: empty
+# - the sum is subtracted from the card total for every load decision, whether
+#   or not those programs are running
+vramExternal:
+  qmd: 2138
 
 # routing:
 # Controls how llama-swap decides which models can run at the same time and

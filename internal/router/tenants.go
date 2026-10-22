@@ -62,9 +62,9 @@ func (b *baseRouter) publishHeld() {
 func (b *baseRouter) Queued() int { return int(b.queued.Load()) }
 
 // VRAMSetter is how the server hands a local router the card total and the
-// VRAM reserve. Every local router implements it.
+// VRAM settings. Every local router implements it.
 type VRAMSetter interface {
-	SetVRAM(totalMiB int64, reserveMiB int)
+	ConfigureVRAM(totalMiB int64, c tenants.VRAMConfig)
 }
 
 var (
@@ -72,10 +72,10 @@ var (
 	_ VRAMSetter = (*Group)(nil)
 )
 
-// SetVRAM sets the card total and the reserve the tenant gate holds loads
-// against, both in MiB.
-func (b *baseRouter) SetVRAM(totalMiB int64, reserveMiB int) {
-	b.tenants.SetVRAM(totalMiB, reserveMiB)
+// ConfigureVRAM sets the card total and the VRAM settings the tenant gate
+// holds loads against.
+func (b *baseRouter) ConfigureVRAM(totalMiB int64, c tenants.VRAMConfig) {
+	b.tenants.ConfigureVRAM(totalMiB, c)
 }
 
 // IdleLoadStarter is how the server hands a local router the function that

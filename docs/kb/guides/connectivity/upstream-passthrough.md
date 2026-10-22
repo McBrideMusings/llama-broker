@@ -98,6 +98,8 @@ upstream:
   answers, so guard only JSON endpoints, never a streaming one.
 
 Choose a probe query the knowledge base always answers, or the guard refuses
-healthy empty answers. The broker does not track VRAM. Keep room for the
-embedder by loading the chat model with a smaller context in its `cmd`, or by
-putting both models in a group or matrix so they do not load together.
+healthy empty answers. Keep room for the embedder by listing it under
+`vramExternal` and setting `vramReserve` (see the tenants guide), so a load
+that would not leave its memory free waits. Loading the chat model with a
+smaller context in its `cmd`, or putting both models in a group or matrix so
+they do not load together, also works.
