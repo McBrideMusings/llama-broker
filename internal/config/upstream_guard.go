@@ -33,6 +33,10 @@ type UpstreamGuardConfig struct {
 	// Paths are RE2 expressions matched against the path after the model ID.
 	Paths []string                 `yaml:"paths"`
 	Probe UpstreamGuardProbeConfig `yaml:"probe"`
+	// MCPTools names the MCP tools whose tools/call answers are checked. A
+	// guarded request with a JSON-RPC body is passed through untouched and
+	// unbuffered unless it is a tools/call for one of these tools.
+	MCPTools []string `yaml:"mcpTools,omitempty"`
 
 	PathRegexps []*regexp.Regexp `yaml:"-"`
 }
