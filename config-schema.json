@@ -894,6 +894,11 @@
                                 "items": {"type": "string"},
                                 "description": "RE2 expressions matched against the path after the model ID."
                             },
+                            "mcpTools": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "MCP tools whose tools/call answers are checked. On a guarded path, a JSON-RPC request is passed through untouched unless it is a tools/call for one of these tools; when its result list is empty and the probe fails or finds nothing, the client gets an MCP tool error (isError: true) for the same id."
+                            },
                             "probe": {
                                 "type": "object",
                                 "required": ["path", "expect"],

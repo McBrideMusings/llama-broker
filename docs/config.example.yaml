@@ -319,11 +319,17 @@ upstream:
   # - probe.expect: top-level JSON array in the probe response that must hold
   #   at least one element
   # - probe.cacheSeconds: how long a probe result is reused (default: 10)
+  # - mcpTools: MCP tools to check on a guarded path such as ^/mcp$. A JSON-RPC
+  #   request is passed through untouched and unbuffered unless it is a
+  #   tools/call for a listed tool; when that answer has an empty result list
+  #   and the probe fails or finds nothing, the client gets HTTP 200 with an MCP
+  #   tool error (isError: true) for the same id, in JSON or SSE framing
   # - reserve the search model's VRAM with the top-level vramExternal and
   #   vramReserve settings
   # guards:
   #   qmd:
-  #     paths: ['^/query$', '^/health$']
+  #     paths: ['^/query$', '^/health$', '^/mcp$']
+  #     mcpTools: [query]
   #     probe:
   #       path: /query
   #       body: '{"searches":[{"type":"vec","query":"caddy tls certificate"}],"limit":1}'

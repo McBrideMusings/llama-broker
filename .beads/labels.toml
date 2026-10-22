@@ -1,0 +1,17 @@
+# Every bead carries at least one of these.
+required = ["proxy", "tenants", "ui", "tooling"]
+
+[labels.proxy]
+about = "Request handling in internal/server and internal/proxy: /v1 and /upstream routes, health checks, request logs, limits."
+
+[labels.tenants]
+about = "GPU scheduling in internal/tenants: who holds the GPU, holds, drains, the VRAM reserve."
+
+[labels.ui]
+about = "The Svelte UI under ui/."
+
+[labels.tooling]
+about = "Build, tests, verify drives, docs and the knowledge base guides under docs/kb/."
+
+[labels.human]
+about = "Needs a person: a decision, a production step, a manual check."

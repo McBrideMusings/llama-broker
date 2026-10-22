@@ -79,7 +79,8 @@ makes the broker check before it passes such an answer on.
 upstream:
   guards:
     qmd:
-      paths: ['^/query$', '^/health$']
+      paths: ['^/query$', '^/health$', '^/mcp$']
+      mcpTools: [query]
       probe:
         path: /query
         body: '{"searches":[{"type":"vec","query":"caddy tls certificate"}],"limit":1}'
@@ -94,6 +95,13 @@ upstream:
   through, so a query that truly matches nothing still answers empty.
 - The probe result is reused for `cacheSeconds` (default 10). A probe that
   fails with an error status or times out is not reused.
+- Clients that reach qmd through MCP (`POST /upstream/qmd/mcp`) need `^/mcp$`
+  in `paths` and the tool names in `mcpTools`. Only a JSON-RPC `tools/call`
+  for a listed tool is held and checked; `ping`, `tools/list` and every other
+  method pass through unbuffered. When the tool's result list is empty and
+  the probe fails or finds nothing, the client gets `200` with a JSON-RPC
+  result for the same `id` whose `isError` is `true` and whose text says the
+  model cannot search and why. SSE answers stay SSE.
 - The broker holds the whole response of a guarded path in memory before it
   answers, so guard only JSON endpoints, never a streaming one.
 
