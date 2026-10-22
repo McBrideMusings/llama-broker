@@ -194,3 +194,34 @@ upstream:
 	assert.Equal(t, 10, cfg.Upstream.RequestLog.MaxSizeMB)
 	assert.Equal(t, 3, cfg.Upstream.RequestLog.MaxBackups)
 }
+
+func TestUpstreamLog_AbortedHandlerIsLogged(t *testing.T) {
+	s, _ := newUpstreamLogTestServer(t, 1, func(w http.ResponseWriter, r *http.Request) {
+		panic(http.ErrAbortHandler)
+	})
+	func() {
+		defer func() { assert.Equal(t, http.ErrAbortHandler, recover(), "panic is re-raised") }()
+		s.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/upstream/qmd/stream", nil))
+	}()
+	got := readEntries(t, s)
+	require.Len(t, got, 1)
+	assert.Equal(t, 502, got[0].Status)
+	require.NotNil(t, got[0].Error)
+	assert.Contains(t, *got[0].Error, "aborted")
+}
+
+func TestUpstreamLog_ReopensAfterFailedRotation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r.jsonl")
+	l, err := newUpstreamRequestLog(config.UpstreamRequestLogConfig{Path: path, Models: []string{"qmd"}, MaxSizeMB: 1, MaxBackups: 1})
+	require.NoError(t, err)
+	defer l.Close()
+	entry := upstreamLogEntry{TS: time.Now().UTC().Format(time.RFC3339Nano), Model: "qmd", Query: json.RawMessage("null")}
+	require.NoError(t, l.write(entry))
+
+	l.file.Close() // simulate a handle lost to a failed rotation
+	l.file = nil
+	require.NoError(t, l.write(entry), "write reopens the file")
+	got, err := l.read(time.Time{}, "", 10)
+	require.NoError(t, err)
+	assert.Len(t, got, 2)
+}

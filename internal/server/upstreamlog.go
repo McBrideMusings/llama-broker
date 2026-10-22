@@ -56,9 +56,10 @@ type upstreamRequestLog struct {
 	maxBytes   int64
 	maxBackups int
 
-	mu   sync.Mutex
-	file *os.File
-	size int64
+	mu     sync.Mutex
+	file   *os.File
+	size   int64
+	closed bool
 }
 
 func newUpstreamRequestLog(cfg config.UpstreamRequestLogConfig) (*upstreamRequestLog, error) {
@@ -71,7 +72,7 @@ func newUpstreamRequestLog(cfg config.UpstreamRequestLogConfig) (*upstreamReques
 		maxBytes:   int64(cfg.MaxSizeMB) << 20,
 		maxBackups: cfg.MaxBackups,
 	}
-	if err := os.MkdirAll(filepath.Dir(l.path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(l.path), 0o700); err != nil {
 		return nil, fmt.Errorf("upstream.requestLog: %w", err)
 	}
 	if err := l.open(); err != nil {
@@ -81,7 +82,7 @@ func newUpstreamRequestLog(cfg config.UpstreamRequestLogConfig) (*upstreamReques
 }
 
 func (l *upstreamRequestLog) open() error {
-	f, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -101,6 +102,7 @@ func (l *upstreamRequestLog) Close() error {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.closed = true
 	if l.file == nil {
 		return nil
 	}
@@ -113,21 +115,24 @@ func (l *upstreamRequestLog) logsModel(name, id string) bool {
 	return slices.Contains(l.models, name) || slices.Contains(l.models, id)
 }
 
-// rotate shifts path -> path.1 -> ... -> path.N and drops the oldest.
+// rotate shifts path -> path.1 -> ... -> path.N and drops the oldest. It always
+// tries to reopen path, so a failed shift never leaves the log without a file.
 // Callers hold l.mu.
 func (l *upstreamRequestLog) rotate() error {
-	if err := l.file.Close(); err != nil {
-		return err
-	}
+	closeErr := l.file.Close()
 	l.file = nil
 	os.Remove(fmt.Sprintf("%s.%d", l.path, l.maxBackups))
 	for i := l.maxBackups - 1; i >= 1; i-- {
 		os.Rename(fmt.Sprintf("%s.%d", l.path, i), fmt.Sprintf("%s.%d", l.path, i+1))
 	}
-	if err := os.Rename(l.path, l.path+".1"); err != nil {
+	renameErr := os.Rename(l.path, l.path+".1")
+	if err := l.open(); err != nil {
 		return err
 	}
-	return l.open()
+	if renameErr != nil {
+		return renameErr
+	}
+	return closeErr
 }
 
 func (l *upstreamRequestLog) write(e upstreamLogEntry) error {
@@ -139,8 +144,13 @@ func (l *upstreamRequestLog) write(e upstreamLogEntry) error {
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.file == nil {
+	if l.closed {
 		return fmt.Errorf("upstream request log is closed")
+	}
+	if l.file == nil {
+		if err := l.open(); err != nil {
+			return err
+		}
 	}
 	if l.size > 0 && l.size+int64(len(line)) > l.maxBytes {
 		if err := l.rotate(); err != nil {
@@ -155,9 +165,6 @@ func (l *upstreamRequestLog) write(e upstreamLogEntry) error {
 // read returns entries with ts >= since for model ("" = any), oldest first,
 // keeping only the newest limit.
 func (l *upstreamRequestLog) read(since time.Time, model string, limit int) ([]upstreamLogEntry, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	files := make([]string, 0, l.maxBackups+1)
 	for i := l.maxBackups; i >= 1; i-- {
 		files = append(files, fmt.Sprintf("%s.%d", l.path, i))
@@ -190,10 +197,14 @@ func (l *upstreamRequestLog) read(since time.Time, model string, limit int) ([]u
 				}
 			}
 			out = append(out, e)
+			if len(out) >= 2*limit {
+				out = append(out[:0], out[len(out)-limit:]...)
+			}
 		}
+		scanErr := sc.Err()
 		f.Close()
-		if err := sc.Err(); err != nil {
-			return nil, err
+		if scanErr != nil {
+			return nil, scanErr
 		}
 	}
 	if len(out) > limit {
@@ -252,13 +263,16 @@ func CreateUpstreamRequestLogMiddleware(l *upstreamRequestLog, cfg config.Config
 
 			start := time.Now()
 			method := r.Method
-			var reqBody []byte
+			// Read ahead (capped) so the query is logged even when the handler
+			// rejects the request without reading its body; the full body is
+			// replayed to the handler.
+			var reqBody bytes.Buffer
 			if r.Body != nil && r.Body != http.NoBody {
-				reqBody, _ = io.ReadAll(io.LimitReader(r.Body, upstreamLogMaxRequestBody))
+				io.Copy(&reqBody, io.LimitReader(r.Body, upstreamLogMaxRequestBody))
 				r.Body = struct {
 					io.Reader
 					io.Closer
-				}{io.MultiReader(bytes.NewReader(reqBody), r.Body), r.Body}
+				}{io.MultiReader(bytes.NewReader(reqBody.Bytes()), r.Body), r.Body}
 			}
 			// Keep the response decompressible for parsing.
 			if ae := r.Header.Get("Accept-Encoding"); ae != "" {
@@ -266,47 +280,65 @@ func CreateUpstreamRequestLogMiddleware(l *upstreamRequestLog, cfg config.Config
 			}
 
 			rec := &upstreamLogWriter{ResponseWriter: w, status: http.StatusOK}
+			// Log in a defer so a handler that aborts (the reverse proxy
+			// panics with http.ErrAbortHandler when the upstream dies
+			// mid-stream) is still recorded.
+			defer func() {
+				p := recover()
+				if p != nil {
+					rec.status = http.StatusBadGateway
+				}
+				l.logRequest(r, rec, start, method, id, remaining, &reqBody, onError, p)
+				if p != nil {
+					panic(p)
+				}
+			}()
 			next.ServeHTTP(rec, r)
-
-			tool, query := describeUpstreamRequest(remaining, reqBody)
-			e := upstreamLogEntry{
-				TS:     start.UTC().Format(time.RFC3339Nano),
-				Client: upstreamClient(r),
-				Model:  id,
-				Method: method,
-				Path:   remaining,
-				Tool:   tool,
-				Query:  query,
-				Status: rec.status,
-				MS:     time.Since(start).Milliseconds(),
-			}
-			body := rec.body.Bytes()
-			if enc := rec.Header().Get("Content-Encoding"); enc != "" {
-				if d, err := decompressBody(body, enc); err == nil {
-					body = d
-				} else {
-					body = nil
-				}
-			}
-			var errMsg string
-			e.Results, e.Top, errMsg = parseUpstreamResponse(body, rec.Header().Get("Content-Type"), rec.truncated)
-			switch {
-			case errMsg != "":
-			case rec.status >= 400:
-				errMsg = truncateString(strings.TrimSpace(string(body)), upstreamLogMaxErrorBytes)
-				if errMsg == "" {
-					errMsg = http.StatusText(rec.status)
-				}
-			case r.Context().Err() != nil:
-				errMsg = "client canceled: " + r.Context().Err().Error()
-			}
-			if errMsg != "" {
-				e.Error = &errMsg
-			}
-			if err := l.write(e); err != nil && onError != nil {
-				onError(err)
-			}
 		})
+	}
+}
+
+// logRequest builds and writes the entry for one finished or aborted request.
+func (l *upstreamRequestLog) logRequest(r *http.Request, rec *upstreamLogWriter, start time.Time, method, id, remaining string, reqBody *bytes.Buffer, onError func(error), panicked any) {
+	tool, query := describeUpstreamRequest(remaining, reqBody.Bytes())
+	e := upstreamLogEntry{
+		TS:     start.UTC().Format(time.RFC3339Nano),
+		Client: upstreamClient(r),
+		Model:  id,
+		Method: method,
+		Path:   remaining,
+		Tool:   tool,
+		Query:  query,
+		Status: rec.status,
+		MS:     time.Since(start).Milliseconds(),
+	}
+	body := rec.body.Bytes()
+	if enc := rec.Header().Get("Content-Encoding"); enc != "" {
+		if d, err := decompressBody(body, enc); err == nil {
+			body = d
+		} else {
+			body = nil
+		}
+	}
+	var errMsg string
+	e.Results, e.Top, errMsg = parseUpstreamResponse(body, rec.Header().Get("Content-Type"), rec.truncated)
+	switch {
+	case errMsg != "":
+	case panicked != nil:
+		errMsg = fmt.Sprintf("response aborted: %v", panicked)
+	case rec.status >= 400:
+		errMsg = truncateString(strings.TrimSpace(string(body)), upstreamLogMaxErrorBytes)
+		if errMsg == "" {
+			errMsg = http.StatusText(rec.status)
+		}
+	case r.Context().Err() != nil:
+		errMsg = "client canceled: " + r.Context().Err().Error()
+	}
+	if errMsg != "" {
+		e.Error = &errMsg
+	}
+	if err := l.write(e); err != nil && onError != nil {
+		onError(err)
 	}
 }
 
