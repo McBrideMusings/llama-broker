@@ -27,12 +27,16 @@ type UpstreamConfig struct {
 	// expressions will be ignored and not trigger a swap. When the config
 	// does not specify any patterns, DefaultUpstreamIgnorePaths is applied.
 	IgnorePaths []*regexp.Regexp `yaml:"-"`
+
+	// RequestLog records /upstream/<model>/* requests to a rotated file.
+	RequestLog UpstreamRequestLogConfig `yaml:"requestLog"`
 }
 
 // rawUpstreamConfig is the intermediate form used to unmarshal the YAML into
 // plain strings, which are then compiled into *regexp.Regexp.
 type rawUpstreamConfig struct {
-	IgnorePaths []string `yaml:"ignorePaths"`
+	IgnorePaths []string                 `yaml:"ignorePaths"`
+	RequestLog  UpstreamRequestLogConfig `yaml:"requestLog"`
 }
 
 // UnmarshalYAML compiles each ignorePaths entry into a *regexp.Regexp. If any
@@ -51,5 +55,9 @@ func (u *UpstreamConfig) UnmarshalYAML(value *yaml.Node) error {
 		patterns = append(patterns, re)
 	}
 	u.IgnorePaths = patterns
+	if err := raw.RequestLog.normalize(); err != nil {
+		return err
+	}
+	u.RequestLog = raw.RequestLog
 	return nil
 }

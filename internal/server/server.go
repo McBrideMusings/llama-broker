@@ -37,9 +37,12 @@ type Server struct {
 	perf     *perf.Monitor
 	inflight *inflightTracker
 	metrics  *metricsMonitor
-	store    store.Store
-	build    BuildInfo
-	hardware *hw.HardwareSnapshot
+	// upstreamLog is the /upstream request audit log; nil when
+	// upstream.requestLog is not configured.
+	upstreamLog *upstreamRequestLog
+	store       store.Store
+	build       BuildInfo
+	hardware    *hw.HardwareSnapshot
 
 	// reference is llama-swap's own embedded documentation, served to the
 	// Playground's agentic chat and to external MCP clients through /api/mcp.
@@ -233,6 +236,11 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 		return nil, fmt.Errorf("store is required")
 	}
 
+	upstreamLog, err := newUpstreamRequestLog(cfg.Upstream.RequestLog)
+	if err != nil {
+		return nil, err
+	}
+
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
 	s := &Server{
 		cfg:           cfg,
@@ -240,6 +248,7 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 		perf:          perfMon,
 		inflight:      newInflightTracker(),
 		metrics:       newMetricsMonitor(logs.ProxyLogs, cfg.MetricsMaxInMemory, cfg.CaptureBuffer, st),
+		upstreamLog:   upstreamLog,
 		store:         st,
 		build:         build,
 		hardware:      hardware,
@@ -385,6 +394,9 @@ func (s *Server) routes() {
 	// Upstream passthrough. Meter only the model-dispatched endpoints that can
 	// produce token usage/timings.
 	upstreamChain := apiChain.Append(
+		CreateUpstreamRequestLogMiddleware(s.upstreamLog, s.cfg, func(err error) {
+			s.logs.ProxyLogs.Errorf("upstream request log: %v", err)
+		}),
 		CreateProfileMiddleware(s),
 		CreateUpstreamInflightMiddleware(s.inflight, s.cfg),
 		CreateMetricsMiddleware(s.metrics, s.cfg),
@@ -417,6 +429,7 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/performance", apiChain.ThenFunc(s.handleAPIPerformance))
 	mux.Handle("GET /api/version", apiChain.ThenFunc(s.handleAPIVersion))
 	mux.Handle("GET /api/hardware", apiChain.ThenFunc(s.handleAPIHardware))
+	mux.Handle("GET /api/upstream/requests", apiChain.ThenFunc(s.handleAPIUpstreamRequests))
 	mux.Handle("GET /api/tailcat", apiChain.ThenFunc(s.handleAPITailcat))
 	mux.Handle("GET /api/captures/{id}", apiChain.ThenFunc(s.handleAPICapture))
 
@@ -566,6 +579,7 @@ func (s *Server) Shutdown(timeout time.Duration) error {
 	if s.capcompatCancel != nil {
 		s.capcompatCancel()
 	}
+	defer s.upstreamLog.Close()
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex

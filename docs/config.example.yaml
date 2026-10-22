@@ -274,6 +274,21 @@ upstream:
     - ^\/ws(\/|$)
     - ^\/api\/jobs$
 
+  # requestLog: append one JSON line per /upstream/<model>/* request to a file
+  # - optional, default: disabled
+  # - use it to audit a model whose container or logs are discarded when the
+  #   model stops (path must be on persistent storage)
+  # - path: the log file; its directory is created if missing
+  # - models: model IDs or aliases to log; required when path is set
+  # - maxSizeMB: rotate when the file would pass this size (default: 10)
+  # - maxBackups: rotated files kept as path.1 ... path.N (default: 3)
+  # - read it back with GET /api/upstream/requests?since=<iso>&model=<id>&limit=<n>
+  # requestLog:
+  #   path: /appdata/llama-broker/qmd-requests.jsonl
+  #   models: [qmd]
+  #   maxSizeMB: 10
+  #   maxBackups: 3
+
 # profiles: named model ID replacements switched at runtime through the UI or API
 # - optional, default: empty dictionary
 # - one profile or none is active; hooks.on_startup.profile selects the profile

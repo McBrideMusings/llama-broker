@@ -846,6 +846,36 @@
                         ".*\\.(js|json|css|png|gif|jpg|jpeg|ico|txt)$"
                     ],
                     "description": "List of RE2 compatible regular expressions. Any request to a path matching any of the regular expressions will be ignored and not trigger a swap. When not specified, defaults to a pattern matching common static-asset suffixes (.js, .json, .css, .png, .gif, .jpg, .jpeg, .ico, .txt)."
+                },
+                "requestLog": {
+                    "type": "object",
+                    "description": "Appends one JSON line per /upstream/<model>/* request to the listed models to a size-rotated file. Read it back with GET /api/upstream/requests.",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "The log file. Put it on persistent storage. Its directory is created if missing."
+                        },
+                        "models": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": "Model IDs or aliases whose upstream requests are logged. Required when path is set."
+                        },
+                        "maxSizeMB": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 10,
+                            "description": "Rotate the file when it would grow past this many MiB."
+                        },
+                        "maxBackups": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 3,
+                            "description": "Number of rotated files (path.1 ... path.N) kept."
+                        }
+                    },
+                    "additionalProperties": false
                 }
             },
             "additionalProperties": false,
