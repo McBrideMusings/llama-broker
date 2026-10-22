@@ -875,6 +875,35 @@
                         "additionalProperties": false
                     }
                 },
+                "guards": {
+                    "type": "object",
+                    "description": "Turns an empty 2xx from a model that cannot do its work into a 503, keyed by model ID or alias. A 2xx response on a guarded path whose probe.expect array is empty or missing triggers the probe request; if the probe finds nothing too, the client gets 503.",
+                    "additionalProperties": {
+                        "type": "object",
+                        "required": ["paths", "probe"],
+                        "properties": {
+                            "paths": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {"type": "string"},
+                                "description": "RE2 expressions matched against the path after the model ID."
+                            },
+                            "probe": {
+                                "type": "object",
+                                "required": ["path", "expect"],
+                                "properties": {
+                                    "method": {"type": "string", "description": "HTTP method. Defaults to POST when body is set, else GET."},
+                                    "path": {"type": "string", "description": "Probe path, relative to the model."},
+                                    "body": {"type": "string", "description": "JSON request body for the probe."},
+                                    "expect": {"type": "string", "description": "Top-level JSON array in the probe response that must hold at least one element."},
+                                    "cacheSeconds": {"type": "integer", "minimum": 0, "default": 10, "description": "Seconds a probe result is reused."}
+                                },
+                                "additionalProperties": false
+                            }
+                        },
+                        "additionalProperties": false
+                    }
+                },
                 "requestLog": {
                     "type": "object",
                     "description": "Appends one JSON line per /upstream/<model>/* request to the listed models to a size-rotated file. Read it back with GET /api/upstream/requests.",

@@ -306,6 +306,29 @@ upstream:
   #     maxQueue: 3
   #     timeout: 60
 
+  # guards: turn an empty 200 from a model that cannot do its work into a 503
+  # - optional, default: no guards
+  # - keyed by model ID or alias
+  # - paths: RE2 expressions matched against the path after the model ID
+  # - on a guarded path, a 2xx response whose probe.expect array is empty or
+  #   missing (a /health body has none) makes the broker send the probe; if the
+  #   probe's array is empty too, or the probe fails, the client gets 503
+  #   instead of the response. A legitimate empty answer is forwarded.
+  # - probe.path, probe.body: a request the model answers with hits when
+  #   healthy; probe.method defaults to POST with a body, else GET
+  # - probe.expect: top-level JSON array in the probe response that must hold
+  #   at least one element
+  # - probe.cacheSeconds: how long a probe result is reused (default: 10)
+  # - the broker does not track VRAM; reserve it in the model's own cmd (a
+  #   smaller context size) or with groups/matrix so the search model keeps room
+  # guards:
+  #   qmd:
+  #     paths: ['^/query$', '^/health$']
+  #     probe:
+  #       path: /query
+  #       body: '{"searches":[{"type":"vec","query":"caddy tls certificate"}],"limit":1}'
+  #       expect: results
+
 # profiles: named model ID replacements switched at runtime through the UI or API
 # - optional, default: empty dictionary
 # - one profile or none is active; hooks.on_startup.profile selects the profile

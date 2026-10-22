@@ -34,6 +34,10 @@ type UpstreamConfig struct {
 	// Limits bounds concurrency, queue depth and duration per model, keyed by
 	// model ID or alias.
 	Limits map[string]UpstreamLimitConfig `yaml:"limits,omitempty"`
+
+	// Guards turn an empty 200 from a model that cannot do its work into an
+	// error, keyed by model ID or alias.
+	Guards map[string]UpstreamGuardConfig `yaml:"guards,omitempty"`
 }
 
 // rawUpstreamConfig is the intermediate form used to unmarshal the YAML into
@@ -42,6 +46,7 @@ type rawUpstreamConfig struct {
 	IgnorePaths []string                       `yaml:"ignorePaths"`
 	RequestLog  UpstreamRequestLogConfig       `yaml:"requestLog"`
 	Limits      map[string]UpstreamLimitConfig `yaml:"limits"`
+	Guards      map[string]UpstreamGuardConfig `yaml:"guards"`
 }
 
 // UnmarshalYAML compiles each ignorePaths entry into a *regexp.Regexp. If any
@@ -70,5 +75,12 @@ func (u *UpstreamConfig) UnmarshalYAML(value *yaml.Node) error {
 		}
 	}
 	u.Limits = raw.Limits
+	for model, g := range raw.Guards {
+		if err := g.validate(model); err != nil {
+			return err
+		}
+		raw.Guards[model] = g
+	}
+	u.Guards = raw.Guards
 	return nil
 }

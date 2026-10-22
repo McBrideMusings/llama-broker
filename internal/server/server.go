@@ -400,6 +400,9 @@ func (s *Server) routes() {
 		CreateUpstreamLimitsMiddleware(s.cfg, func(format string, args ...any) {
 			s.logs.ProxyLogs.Warnf(format, args...)
 		}),
+		CreateUpstreamGuardMiddleware(s.cfg, func(format string, args ...any) {
+			s.logs.ProxyLogs.Warnf(format, args...)
+		}),
 		CreateProfileMiddleware(s),
 		CreateUpstreamInflightMiddleware(s.inflight, s.cfg),
 		CreateMetricsMiddleware(s.metrics, s.cfg),

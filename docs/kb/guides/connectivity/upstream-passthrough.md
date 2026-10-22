@@ -1,10 +1,10 @@
 ---
 title: Upstream API passthrough
-summary: Control which /upstream model paths are ignored instead of triggering a model swap, and log upstream requests to a file, and limit a model's concurrency, queue depth and request time.
+summary: Skip swap-triggering paths, log upstream requests, limit a model's queue and request time, and turn an empty answer from a broken model into a 503.
 category: guides
 tags: [upstream, proxy, api]
-config_keys: [upstream, upstream.ignorePaths, upstream.requestLog, upstream.limits]
-updated: 2026-08-28
+config_keys: [upstream, upstream.ignorePaths, upstream.requestLog, upstream.limits, upstream.guards]
+updated: 2026-10-22
 ---
 
 # Upstream API passthrough
@@ -67,3 +67,37 @@ upstream:
 
 Set `timeout` above the model's normal worst case, or healthy slow requests
 fail. Model load time counts toward it.
+
+## Refuse an empty answer from a model that cannot work
+
+A search server can answer `200` with `{"results":[]}` while its embedder
+failed to start, for example when the chat model leaves too little VRAM. Its
+`/health` still says `ok`, so clients read "nothing found". `upstream.guards`
+makes the broker check before it passes such an answer on.
+
+```yaml
+upstream:
+  guards:
+    qmd:
+      paths: ['^/query$', '^/health$']
+      probe:
+        path: /query
+        body: '{"searches":[{"type":"vec","query":"caddy tls certificate"}],"limit":1}'
+        expect: results
+```
+
+- On a guarded path, a `2xx` response whose `results` array is empty or
+  missing triggers the probe. A `/health` body has no `results`, so it always
+  triggers it.
+- If the probe returns a non-2xx status or an empty `results`, the client gets
+  `503` and the broker logs the refusal. Otherwise the original response goes
+  through, so a query that truly matches nothing still answers empty.
+- The probe result is reused for `cacheSeconds` (default 10). A probe that
+  fails with an error status or times out is not reused.
+- The broker holds the whole response of a guarded path in memory before it
+  answers, so guard only JSON endpoints, never a streaming one.
+
+Choose a probe query the knowledge base always answers, or the guard refuses
+healthy empty answers. The broker does not track VRAM. Keep room for the
+embedder by loading the chat model with a smaller context in its `cmd`, or by
+putting both models in a group or matrix so they do not load together.
